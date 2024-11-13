@@ -1,11 +1,14 @@
 import json
 import requests
+from PIL import Image
+import io
+import base64
 
 def load_roles(role_file):
     with open(role_file, 'r') as file:
         return json.load(file)
 
-def get_llm_response(role, user_input, images=None):
+def get_llm_response(role, user_input, model, images=None):
     roles = load_roles('agent_roles.json')
     role_description = roles.get(role, "Unknown Role")
     
@@ -13,8 +16,17 @@ def get_llm_response(role, user_input, images=None):
     prompt = f"Role: {role}\nDescription: {role_description}\nUser Input: {user_input}"
     
     if images:
-        # Simulate multimodal LLM response
-        image_captions = [f"Caption for image {i+1}: This is a description of the uploaded image {i+1}." for i in range(len(images))]
+        # Convert images to base64
+        image_captions = []
+        image_data = []
+        for i, image in enumerate(images):
+            img = Image.open(image)
+            buffered = io.BytesIO()
+            img.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            image_data.append(img_str)
+            image_captions.append(f"Caption for image {i+1}: This is a description of the uploaded image {i+1}.")
+        
         prompt += f"\nImage Captions: {', '.join(image_captions)}"
     
     # Define the Ollama API endpoint
@@ -22,10 +34,13 @@ def get_llm_response(role, user_input, images=None):
     
     # Define the payload for the API request
     payload = {
-        "model": "impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest",  # Replace with your actual model name
+        "model": model,  # Use the selected model
         "prompt": prompt,
         "max_tokens": 200  # Adjust the number of tokens as needed
     }
+    
+    if images:
+        payload["images"] = image_data
     
     try:
         # Send the request to the Ollama API with stream=True
