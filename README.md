@@ -10,7 +10,7 @@ Run locally in cmd terminal with ```olama pull model-name```, ```olama run model
 3. Download ArtAgent
 
 ## Setup
-1. In Ollama use ```olama list``` to see full names of models you have locally (you need to enter the full name as displayed in Ollama!)
+1. Run ollama in terminal, use ```olama list``` to see full names of models you have locally (you need to enter the full name as displayed in Ollama!)
 2. Enter your models into models.json. Set if the model has vision by using "vision": true/false
 3. Run ArtAgent
 
