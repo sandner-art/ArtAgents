@@ -8,13 +8,11 @@ def load_roles(role_file):
     with open(role_file, 'r') as file:
         return json.load(file)
 
-def get_llm_response(role, user_input, model, images=None):
+def get_llm_response(role, prompt, model, images=None, max_tokens=200):
     roles = load_roles('agent_roles.json')
     role_description = roles.get(role, "Unknown Role")
     
     # Construct the prompt for the LLM
-    prompt = f"Role: {role}\nDescription: {role_description}\nUser Input: {user_input}"
-    
     if images:
         # Convert images to base64
         image_captions = []
@@ -35,7 +33,7 @@ def get_llm_response(role, user_input, model, images=None):
     payload = {
         "model": model,  # Use the selected model
         "prompt": prompt,
-        "max_tokens": 200  # Adjust the number of tokens as needed
+        "max_tokens": max_tokens  # Use the specified max tokens
     }
     
     if images:
