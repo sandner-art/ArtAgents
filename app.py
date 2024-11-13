@@ -17,8 +17,8 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
 
     # Check if the model supports vision
     model_info = next((m for m in models if m["name"] == model), None)
-    if model_info and not model_info["vision"]:
-        return "Error: Selected model does not support vision."
+    if model_info is None:
+        return "Error: Model information not found."
 
     # Initialize a list to store confirmation messages
     confirmation_messages = []
@@ -58,9 +58,29 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
                 f.write(response)
             confirmation_messages.append(f"Created new file: {output_file}\n")
 
-    # Ensure folder_path is a valid directory
-    if not os.path.isdir(folder_path):
-        return f"Error: {folder_path} is not a valid directory."
+    # Check if the folder path is empty or not a valid directory
+    if not folder_path.strip() or not os.path.isdir(folder_path):
+        roles = load_roles('agent_roles.json')
+        role_description = roles.get(role, "Unknown Role")
+
+        # Construct the prompt for the LLM without images
+        prompt = f"User Input: {user_input}\n\nRole: {role}\nDescription: {role_description}"
+
+        response = get_llm_response(role, prompt, model, [], max_tokens)
+
+        return response
+
+    # If the model does not support vision, process only text inputs
+    if not model_info["vision"]:
+        roles = load_roles('agent_roles.json')
+        role_description = roles.get(role, "Unknown Role")
+
+        # Construct the prompt for the LLM without images
+        prompt = f"User Input: {user_input}\n\nRole: {role}\nDescription: {role_description}"
+
+        response = get_llm_response(role, prompt, model, [], max_tokens)
+
+        return response
 
     # Iterate through all files in the directory
     for file_name in os.listdir(folder_path):
@@ -91,15 +111,25 @@ with gr.Blocks() as demo:
     gr.Markdown("# sandner.art | Agent-Based Chat with Ollama")
     gr.Markdown("Select an agent, model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input.")
 
-    folder_path = gr.Textbox(label="Folder Path")
-    file_handling_option = gr.Radio(["Overwrite", "Skip", "Append", "Prepend"], label="File Handling", value="Skip")
-    role = gr.Dropdown(role_names, label="Select Agent")
-    user_input = gr.Textbox(label="User Input", lines=2)
-    model_with_vision = gr.Dropdown(model_names_with_vision, label="Select Model")
-    max_tokens = gr.Slider(50, 1500, step=10, value=1500, label="Max Tokens")
-    llm_response = gr.Textbox(label="LLM Response", lines=3)
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("### Folder Input")
+            folder_path = gr.Textbox(label="Folder Path")
+            file_handling_option = gr.Radio(["Overwrite", "Skip", "Append", "Prepend"], label="File Handling", value="Skip")
 
-    submit_button = gr.Button("Submit")
+        with gr.Column(scale=1):
+            gr.Markdown("### Common Inputs")
+            role = gr.Dropdown(role_names, label="Select Agent")
+            user_input = gr.Textbox(label="User Input", lines=2)
+            model_with_vision = gr.Dropdown(model_names_with_vision, label="Select Model")
+            max_tokens = gr.Slider(50, 1500, step=10, value=1500, label="Max Tokens")
+            submit_button = gr.Button("Submit")
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("### LLM Response")
+            llm_response = gr.Textbox(label="LLM Response", lines=10)
+
     submit_button.click(
         chat,
         inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option],
