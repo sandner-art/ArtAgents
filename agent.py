@@ -20,9 +20,8 @@ def get_llm_response(role, user_input, model, images=None):
         image_captions = []
         image_data = []
         for i, image in enumerate(images):
-            img = Image.open(image)
             buffered = io.BytesIO()
-            img.save(buffered, format="JPEG")
+            image.save(buffered, format="JPEG")
             img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
             image_data.append(img_str)
             image_captions.append(f"Caption for image {i+1}: This is a description of the uploaded image {i+1}.")

@@ -7,9 +7,9 @@ def chat(role, user_input, model, images):
     if images is None:
         images = []
     elif isinstance(images, dict):  # Gradio returns a dictionary for single image uploads
-        images = [images['name']]
+        images = [images['image']]
     elif isinstance(images, list):  # Gradio returns a list for multiple image uploads
-        images = [image['name'] for image in images]
+        images = [image['image'] for image in images]
     
     response = get_llm_response(role, user_input, model, images)
     return response
