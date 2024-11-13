@@ -1,0 +1,10 @@
+[
+    {
+        "name": "impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest",
+        "vision": false
+    },
+    {
+        "name": "llava:latest",
+        "vision": true
+    }
+]
