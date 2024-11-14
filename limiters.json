@@ -1,0 +1,14 @@
+{
+    "Flux": {
+        "limiter_token_slider": 450,
+        "limiter_prompt_format": "Use natural language, do not repeat the same words and duplicate adjectives, create a prompt for generative AI visual model Flux\n"
+    },
+    "SDXL": {
+        "limiter_token_slider": 150,
+        "limiter_prompt_format": "Use tags for descriptions and subjects, a shorter descriptions of a scene, adjectives, descriptors, for generative art stable diffusion and SDXL\n"
+    },
+    "SD3.5": {
+        "limiter_token_slider": 250,
+        "limiter_prompt_format": "Use natural language, be concise, very descriptive and do not repeat yourself, capture the scene concisely and meticulously for generative AI stable diffusion model SD3.5\n"
+    }
+}

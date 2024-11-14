@@ -1,0 +1,5 @@
+{
+    "ollama_url": "http://localhost:11434/api/generate",
+    "max_tokens_slider": 1500,
+    "ollama_api_prompt_to_console": true
+}
