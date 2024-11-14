@@ -3,6 +3,7 @@ import json
 import os
 from PIL import Image
 from agent import get_llm_response, load_roles
+import numpy as np
 
 def load_models(model_file):
     with open(model_file, 'r') as file:
@@ -60,6 +61,9 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
         # Construct the prompt for the LLM
         prompt = f"User Input: {user_input}\n\nRole: {role}\nDescription: {role_description}\n{limiter_prompt_format}"
 
+        # Debugging: Print image details
+        print(f"Processing image: {file_path}")
+
         response = get_llm_response(role, prompt, model, [image], max_tokens, file_path, user_input, model_with_vision, max_tokens, single_image, limiters_handling_option)
 
         # Create or update the .txt file based on the selected options
@@ -98,7 +102,8 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
 
         # If single image is provided and model supports vision, use it
         if single_image is not None and model_info["vision"]:
-            image = Image.open(single_image.name)
+            # Convert numpy array to PIL Image
+            image = Image.fromarray(single_image.astype('uint8'))
             response = get_llm_response(role, prompt, model, [image], max_tokens, None, user_input, model_with_vision, max_tokens, single_image, limiters_handling_option)
         else:
             response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option)
@@ -179,7 +184,7 @@ with gr.Blocks() as demo:
     is_user_adjusted = gr.State(value=False)
 
     # Event to update max_tokens slider when limiter is changed
-    def on_limiter_change(limiter_handling_option, user_set_max_tokens):
+    def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
         # Load limiters
         limiters = load_limiters('limiters.json')
         limiter_settings = limiters.get(limiter_handling_option, {})
@@ -190,7 +195,7 @@ with gr.Blocks() as demo:
 
     limiters_handling_option.change(
         fn=on_limiter_change,
-        inputs=[limiters_handling_option, max_tokens],
+        inputs=[limiters_handling_option, max_tokens, is_user_adjusted],
         outputs=[max_tokens, is_user_adjusted]
     )
 

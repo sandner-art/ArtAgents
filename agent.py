@@ -3,6 +3,7 @@ import requests
 from PIL import Image
 import io
 import base64
+import numpy as np
 
 def load_roles(role_file):
     with open(role_file, 'r') as file:
@@ -41,7 +42,7 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=200, file_path
             "model": model,
             "temperature": 0.7,  # Assuming a default temperature value
             "num_predict": max_tokens,  # Use max_tokens as num_predict
-            "image_file": single_image.name if single_image else None,
+            "image_file": "single_image" if isinstance(single_image, np.ndarray) else None,
             "text_caption": file_path if file_path else None,
             "prompt": prompt
         }
