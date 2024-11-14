@@ -116,18 +116,22 @@ with gr.Blocks() as demo:
             gr.Markdown("### Folder Input")
             folder_path = gr.Textbox(label="Folder Path")
             file_handling_option = gr.Radio(["Overwrite", "Skip", "Append", "Prepend"], label="File Handling", value="Skip")
-
+            with gr.Row(): # Add limiters and image input
+                with gr.Column(scale=1):
+                     single_image_display = gr.Image(label="Single Image Input")
+                with gr.Column(scale=1):
+                    limiters_handling_option = gr.Radio(["Off", "Flux", "SDXL", "SD3.5"], label="Limiters", value="Off")               
         with gr.Column(scale=1):
             gr.Markdown("### Common Inputs")
             role = gr.Dropdown(role_names, label="Select Agent")
             user_input = gr.Textbox(label="User Input", lines=2)
             model_with_vision = gr.Dropdown(model_names_with_vision, label="Select Model")
-            max_tokens = gr.Slider(50, 1500, step=10, value=1500, label="Max Tokens")
+            max_tokens = gr.Slider(50, 1500, step=10, value=350, label="Max Tokens")
             submit_button = gr.Button("Submit")
 
     with gr.Row():
         with gr.Column(scale=1):
-            gr.Markdown("### LLM Response")
+            gr.Markdown("### Output")
             llm_response = gr.Textbox(label="LLM Response", lines=10)
 
     submit_button.click(
