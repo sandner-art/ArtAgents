@@ -8,7 +8,11 @@ def load_roles(role_file):
     with open(role_file, 'r') as file:
         return json.load(file)
 
-def get_llm_response(role, prompt, model, images=None, max_tokens=200):
+def load_settings(settings_file):
+    with open(settings_file, 'r') as file:
+        return json.load(file)
+
+def get_llm_response(role, prompt, model, images=None, max_tokens=200, file_path=None, user_input=None, model_with_vision=None, num_predict=None, single_image=None, limiters_handling_option=None):
     roles = load_roles('agent_roles.json')
     role_description = roles.get(role, "Unknown Role")
     
@@ -26,8 +30,22 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=200):
         
         prompt += f"\nImage Captions: {', '.join(image_captions)}"
     
-    # Define the Ollama API endpoint
-    ollama_url = "http://localhost:11434/api/generate"  # Ensure this is the correct endpoint
+    # Load settings
+    settings = load_settings('settings.json')
+    ollama_url = settings.get("ollama_url", "http://localhost:11434/api/generate")
+    ollama_api_prompt_to_console = settings.get("ollama_api_prompt_to_console", True)
+    
+    # Log the full prompt and other details to the console
+    if ollama_api_prompt_to_console:
+        log_details = {
+            "model": model,
+            "temperature": 0.7,  # Assuming a default temperature value
+            "num_predict": max_tokens,  # Use max_tokens as num_predict
+            "image_file": single_image.name if single_image else None,
+            "text_caption": file_path if file_path else None,
+            "prompt": prompt
+        }
+        print(json.dumps(log_details, indent=4))
     
     # Define the payload for the API request
     payload = {
