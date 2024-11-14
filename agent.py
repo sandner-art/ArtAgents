@@ -13,7 +13,7 @@ def load_settings(settings_file):
     with open(settings_file, 'r') as file:
         return json.load(file)
 
-def get_llm_response(role, prompt, model, images=None, max_tokens=200, file_path=None, user_input=None, model_with_vision=None, num_predict=None, single_image=None, limiters_handling_option=None):
+def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_path=None, user_input=None, model_with_vision=None, num_predict=None, single_image=None, limiters_handling_option=None):
     roles = load_roles('agent_roles.json')
     role_description = roles.get(role, "Unknown Role")
     
