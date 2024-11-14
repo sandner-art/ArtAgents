@@ -108,7 +108,7 @@ model_names_with_vision = [f"{m['name']} (VISION)" if m['vision'] else m['name']
 
 # Create Gradio interface
 with gr.Blocks() as demo:
-    gr.Markdown("# sandner.art | Agent-Based Chat with Ollama")
+    gr.Markdown("# ArtAgents | Agent-Based Chat with Ollama")
     gr.Markdown("Select an agent, model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input.")
 
     with gr.Row():
