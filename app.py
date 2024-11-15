@@ -179,7 +179,7 @@ with gr.Blocks() as demo:
         with gr.Column(scale=1):
             gr.Markdown("### Output")
             llm_response = gr.Textbox(label="LLM Response", lines=10)
-
+            gr.Markdown("sandner.art | [Creative AI/ML Research](https://github.com/sandner-art)")
     # State variable to track if the user has manually adjusted the slider
     is_user_adjusted = gr.State(value=False)
 
