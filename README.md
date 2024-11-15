@@ -1,7 +1,8 @@
 # ArtAgents: Agent-Based Chat with Ollama
 Framework for LLM based captioning and prompt engineering experiments
 
-Overview: Select an agent, a model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input. Create prompts and combine the text with visuals for captioning or image generation.
+## Overview
+Select an agent, a model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input. Create prompts and combine the text with visuals for captioning or image generation.
 
 Use either a folder of images (1) or one image (2) to experiment with text or multimodal LLMs. Finetune your text prompt output or caption using agents in dedicated roles and user input (3). Try limiters to adjust the prompts even more. 
 
