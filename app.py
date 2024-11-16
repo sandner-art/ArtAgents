@@ -25,7 +25,7 @@ def update_max_tokens(limiter_handling_option, user_set_max_tokens, is_user_adju
     
     return limiter_token_slider
 
-def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image):
+def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings):
     model = next((m["name"] for m in models if f"{m['name']} (VISION)" == model_with_vision or m["name"] == model_with_vision), None)
 
     if model is None:
