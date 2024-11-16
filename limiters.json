@@ -3,7 +3,7 @@
         "limiter_token_slider": 650,
         "limiter_prompt_format": "Use natural language, do not repeat the same words and duplicate adjectives, create a prompt for generative AI visual model Flux. Avoid comments, opinions, adlib recommendations, special interpunction or formatting in your reply.\n"
     },
-    "SDXL": {
+    "XL": {
         "limiter_token_slider": 225,
         "limiter_prompt_format": "Use descriptive tags for descriptions and subjects, use commas and and sigle dot to structure your output, use shorter descriptions of a scene, adjectives, descriptors, you may use dashes for combined words, the reply shall used for generative art stable diffusion and SDXL. Do not use asterisks or special interpuction symbols. Avoid comments, opinions, adlib recommendations, symbols or formatting in your reply.\n"
     },
