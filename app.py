@@ -230,35 +230,37 @@ with gr.Blocks() as demo:
             outputs=llm_response
         )
     with gr.Tab("App"):
-        gr.Markdown("### General Settings")
-        ollama_url = gr.Textbox(label="Ollama URL", value=settings.get("ollama_url", ""))
-        max_tokens_slider = gr.Slider(label="Max Tokens", minimum=1, maximum=3000, step=1, value=settings.get("max_tokens_slider", 1500))
-        ollama_api_prompt_to_console = gr.Checkbox(label="Ollama API Prompt to Console", value=settings.get("ollama_api_prompt_to_console", False))
-        using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
-        using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("### General Settings")
+                ollama_url = gr.Textbox(label="Ollama URL", value=settings.get("ollama_url", ""))
+                max_tokens_slider = gr.Slider(label="Max Tokens", minimum=1, maximum=3000, step=1, value=settings.get("max_tokens_slider", 1500))
+                ollama_api_prompt_to_console = gr.Checkbox(label="Ollama API Prompt to Console", value=settings.get("ollama_api_prompt_to_console", False))
+                using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
+                using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
+            with gr.Column(scale=1):
+                gr.Markdown("### Ollama API Options")
+                ollama_api_options_group = gr.Group()
+                ollama_api_options_components = []
+                with ollama_api_options_group:
+                    for key, value in ollama_api_options.items():
+                        if isinstance(value, bool):
+                            component = gr.Checkbox(label=key, value=value)
+                        elif isinstance(value, int):
+                            component = gr.Slider(label=key, minimum=0, maximum=10000, step=1, value=value)
+                        elif isinstance(value, float):
+                            component = gr.Slider(label=key, minimum=0.0, maximum=1.0, step=0.01, value=value)
+                        else:
+                            component = gr.Textbox(label=key, value=value)
+                        ollama_api_options_components.append(component)
 
-        gr.Markdown("### Ollama API Options")
-        ollama_api_options_group = gr.Group()
-        ollama_api_options_components = []
-        with ollama_api_options_group:
-            for key, value in ollama_api_options.items():
-                if isinstance(value, bool):
-                    component = gr.Checkbox(label=key, value=value)
-                elif isinstance(value, int):
-                    component = gr.Slider(label=key, minimum=0, maximum=10000, step=1, value=value)
-                elif isinstance(value, float):
-                    component = gr.Slider(label=key, minimum=0.0, maximum=1.0, step=0.01, value=value)
-                else:
-                    component = gr.Textbox(label=key, value=value)
-                ollama_api_options_components.append(component)
+                save_settings_button = gr.Button("Save Settings")
 
-        save_settings_button = gr.Button("Save Settings")
-
-        save_settings_button.click(
-            fn=save_settings,
-            inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents] + ollama_api_options_components,
-            outputs=[gr.Textbox(label="Status", lines=1)]
-        )
+                save_settings_button.click(
+                    fn=save_settings,
+                    inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents] + ollama_api_options_components,
+                    outputs=[gr.Textbox(label="Status", lines=1)]
+                )
 
     with gr.Tab("Agent Roles"):
         gr.Markdown("### agent_roles.json")
