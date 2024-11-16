@@ -1,37 +1,37 @@
 {
-    "ollama_url": "http://localhost:11434/api/generate", // URL endpoint for the Ollama API to generate text
-    "max_tokens_slider": 1715, // Maximum number of tokens to generate in a single request
-    "ollama_api_prompt_to_console": true, // Whether to log the prompt sent to the API to the console
-    "using_default_agents": true, // Whether to use default agents (predefined default roles)
-    "using_custom_agents": false, // Whether to use custom agents (predefined custom roles)
+    "ollama_url": "http://localhost:11434/api/generate",
+    "max_tokens_slider": 1715,
+    "ollama_api_prompt_to_console": true,
+    "using_default_agents": true,
+    "using_custom_agents": false,
     "ollama_api_options": {
-        "num_keep": 5, // Number of generated sequences to keep
-        "seed": 42, // Random seed for reproducibility
-        "num_predict": 800, // Number of tokens to predict in each call
-        "top_k": 20, // Keep the top K tokens with the highest probability
-        "top_p": 0.9, // Keep tokens with cumulative probability up to P
-        "min_p": 0.0, // Minimum probability threshold for token selection
-        "tfs_z": 0.5, // Tail free sampling parameter Z
-        "typical_p": 0.7, // Typical probability mass to consider for token sampling
-        "repeat_last_n": 33, // Number of last tokens to consider for repeat penalty
-        "temperature": 0.8, // Temperature to control randomness in sampling (lower values make it more deterministic)
-        "repeat_penalty": 1.2, // Penalty for repeating tokens
-        "presence_penalty": 1.5, // Penalty for tokens that have already appeared in the generated text
-        "frequency_penalty": 1.0, // Penalty for frequent tokens in the generated text
-        "mirostat": 1, // Mirostat algorithm variant to use for dynamic temperature adjustment
-        "mirostat_tau": 0.8, // Mirostat target perplexity
-        "mirostat_eta": 0.6, // Mirostat learning rate
-        "penalize_newline": true, // Whether to penalize newline characters
-        "stop": ["\n", "user:"], // Tokens that signal the end of generation
-        "numa": false, // Whether to use NUMA-aware memory allocation
-        "num_ctx": 1024, // Number of context tokens to consider
-        "num_batch": 2, // Number of tokens to process in parallel per batch
-        "num_gpu": 1, // Number of GPUs to use (set to 1, but not actually using GPU)
-        "main_gpu": 0, // Main GPU to use (set to 0, but not actually using GPU)
-        "low_vram": false, // Whether to optimize for low VRAM usage
-        "vocab_only": false, // Whether to only output the vocabulary (not the generated text)
-        "use_mmap": true, // Whether to use memory-mapped files for loading the model
-        "use_mlock": false, // Whether to lock the model in memory to prevent swapping
-        "num_thread": 24 // Number of CPU threads to use for generation
+        "num_keep": 5,
+        "seed": 42,
+        "num_predict": 800,
+        "top_k": 20,
+        "top_p": 0.9,
+        "min_p": 0.0,
+        "tfs_z": 0.5,
+        "typical_p": 0.7,
+        "repeat_last_n": 33,
+        "temperature": 0.8,
+        "repeat_penalty": 1.2,
+        "presence_penalty": 1.5,
+        "frequency_penalty": 1.0,
+        "mirostat": 1,
+        "mirostat_tau": 0.8,
+        "mirostat_eta": 0.6,
+        "penalize_newline": true,
+        "stop": ["\n", "user:"],
+        "numa": false,
+        "num_ctx": 1024,
+        "num_batch": 2,
+        "num_gpu": 1,
+        "main_gpu": 0,
+        "low_vram": false,
+        "vocab_only": false,
+        "use_mmap": true,
+        "use_mlock": false,
+        "num_thread": 24
     }
 }
