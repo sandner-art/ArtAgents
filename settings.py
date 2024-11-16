@@ -1,5 +1,6 @@
 import json
 import os
+import gradio as gr  # Add this import
 
 # Load JSON files
 def load_json(file_path):
@@ -36,7 +37,7 @@ def format_json_to_html_table(data):
 # Function to remove an agent role
 def remove_agent_role(agent_textbox, role_textbox, custom_agent_roles_display):
     agent = agent_textbox
-    custom_agent_roles = custom_agent_roles_display.value
+    custom_agent_roles = custom_agent_roles_display  # Directly access the dictionary
     if agent in custom_agent_roles:
         del custom_agent_roles[agent]
     return gr.update(value=custom_agent_roles), gr.update(visible=True)
@@ -45,13 +46,13 @@ def remove_agent_role(agent_textbox, role_textbox, custom_agent_roles_display):
 def add_agent_role(agent_textbox, role_textbox, custom_agent_roles_display, unsaved_changes_indicator):
     agent = agent_textbox
     role = role_textbox
-    custom_agent_roles = custom_agent_roles_display.value
+    custom_agent_roles = custom_agent_roles_display  # Directly access the dictionary
     if agent and role:
         custom_agent_roles[agent] = role
     return gr.update(value=custom_agent_roles), "", "", gr.update(visible=True)
 
 # Function to save custom agent roles
 def save_custom_agent_roles(custom_agent_roles_display, unsaved_changes_indicator):
-    custom_agent_roles = custom_agent_roles_display.value
+    custom_agent_roles = custom_agent_roles_display  # Directly access the dictionary
     status_message = save_custom_agent_roles_to_file(custom_agent_roles)
     return status_message, gr.update(visible=False)
