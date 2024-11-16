@@ -3,5 +3,6 @@
     "max_tokens_slider": 1715,
     "ollama_api_prompt_to_console": true,
     "using_default_agents": true,
-    "using_custom_agents": false
+    "using_custom_agents": false,
+    "ollama_api_options": {}
 }

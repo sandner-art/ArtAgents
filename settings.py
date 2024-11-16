@@ -1,6 +1,6 @@
 import json
 import os
-import gradio as gr  # Add this import
+import gradio as gr
 
 # Load JSON files
 def load_json(file_path):
@@ -9,13 +9,14 @@ def load_json(file_path):
             return json.load(file)
     return {}
 
-def save_settings(ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents):
+def save_settings(ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, ollama_api_options):
     settings = {
         "ollama_url": ollama_url,
         "max_tokens_slider": max_tokens_slider,
         "ollama_api_prompt_to_console": ollama_api_prompt_to_console,
         "using_default_agents": using_default_agents,
-        "using_custom_agents": using_custom_agents
+        "using_custom_agents": using_custom_agents,
+        "ollama_api_options": ollama_api_options
     }
     with open('settings.json', 'w') as file:
         json.dump(settings, file, indent=4)

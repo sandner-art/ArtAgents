@@ -19,10 +19,10 @@ def update_max_tokens(limiter_handling_option, user_set_max_tokens, is_user_adju
     limiters = load_limiters('limiters.json')
     limiter_settings = limiters.get(limiter_handling_option, {})
     limiter_token_slider = limiter_settings.get("limiter_token_slider", user_set_max_tokens)
-    
+
     if is_user_adjusted:
         return user_set_max_tokens
-    
+
     return limiter_token_slider
 
 def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings):
@@ -38,14 +38,14 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
     limiters = load_limiters('limiters.json')
     limiter_settings = limiters.get(limiters_handling_option, {})
     limiter_prompt_format = limiter_settings.get("limiter_prompt_format", "")
-    limiter_token_slider = limiter_settings.get("limiter_token_slider", max_tokens)
+    limiter_token_slider = limiter_settings.get("limiter_token_slider", max_tokens)  # Corrected typo here
 
     max_tokens = min(max_tokens, limiter_token_slider)
 
     confirmation_messages = []
 
     def process_image(image, file_path):
-        roles = load_roles('agent_roles.json')
+        roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
         role_description = roles.get(role, "Unknown Role")
 
         prompt = f"User Input: {user_input}\n\nRole: {role}\nDescription: {role_description}\n{limiter_prompt_format}"
@@ -80,7 +80,7 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
             confirmation_messages.append(f"Created new file: {output_file}\n")
 
     if not folder_path.strip() or not os.path.isdir(folder_path):
-        roles = load_roles('agent_roles.json')
+        roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
         role_description = roles.get(role, "Unknown Role")
 
         prompt = f"User Input: {user_input}\n\nRole: {role}\nDescription: {role_description}\n{limiter_prompt_format}"
@@ -94,7 +94,7 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
         return response
 
     if not model_info["vision"]:
-        roles = load_roles('agent_roles.json')
+        roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
         role_description = roles.get(role, "Unknown Role")
 
         prompt = f"User Input: {user_input}\n\nRole: {role}\nDescription: {role_description}\n{limiter_prompt_format}"
@@ -115,7 +115,6 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
 
     return "\n".join(confirmation_messages)
 
-# Load roles for dropdown
 def load_roles(default_roles_file, custom_roles_file, settings):
     roles = {}
     if settings.get("using_default_agents", False):
@@ -124,22 +123,41 @@ def load_roles(default_roles_file, custom_roles_file, settings):
         roles.update(load_json(custom_roles_file))
     return roles
 
-# Load models for dropdown
 models = load_models('models.json')
 model_names_with_vision = [f"{m['name']} (VISION)" if m['vision'] else m['name'] for m in models]
 
-# Load settings
 settings = load_settings('settings.json')
 ollama_url = settings.get("ollama_url", "http://localhost:11434/api/generate")
 max_tokens_slider = settings.get("max_tokens_slider", 1500)
 ollama_api_prompt_to_console = settings.get("ollama_api_prompt_to_console", True)
+using_default_agents = settings.get("using_default_agents", False)
+using_custom_agents = settings.get("using_custom_agents", False)
+ollama_api_options = settings.get("ollama_api_options", {})
+
+def save_settings(ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, *ollama_api_options_values):
+    ollama_api_options = {}
+    for key, value in zip(ollama_api_options.keys(), ollama_api_options_values):
+        ollama_api_options[key] = value
+
+    settings = {
+        "ollama_url": ollama_url,
+        "max_tokens_slider": max_tokens_slider,
+        "ollama_api_prompt_to_console": ollama_api_prompt_to_console,
+        "using_default_agents": using_default_agents,
+        "using_custom_agents": using_custom_agents,
+        "ollama_api_options": ollama_api_options
+    }
+
+    with open('settings.json', 'w') as f:
+        json.dump(settings, f, indent=4)
+    
+    return "Settings saved successfully."
 
 def update_role_dropdown(using_default_agents, using_custom_agents):
     roles = load_roles('agent_roles.json', 'custom_agent_roles.json', {"using_default_agents": using_default_agents, "using_custom_agents": using_custom_agents})
     role_names = list(roles.keys())
     return gr.update(choices=role_names, value=role_names[0] if role_names else None)
 
-# Create Gradio interface
 with gr.Blocks() as demo:
     gr.Markdown("# ArtAgents | Agent-Based Chat with Ollama")
     gr.Markdown("Select an agent, model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input.")
@@ -194,7 +212,6 @@ with gr.Blocks() as demo:
             outputs=[max_tokens, is_user_adjusted]
         )
 
-        
         using_default_agents.change(
             fn=update_role_dropdown,
             inputs=[using_default_agents, using_custom_agents],
@@ -212,75 +229,47 @@ with gr.Blocks() as demo:
             inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image_display, gr.State(settings)],
             outputs=llm_response
         )
+    with gr.Tab("App"):
+        gr.Markdown("### General Settings")
+        ollama_url = gr.Textbox(label="Ollama URL", value=settings.get("ollama_url", ""))
+        max_tokens_slider = gr.Slider(label="Max Tokens", minimum=1, maximum=3000, step=1, value=settings.get("max_tokens_slider", 1500))
+        ollama_api_prompt_to_console = gr.Checkbox(label="Ollama API Prompt to Console", value=settings.get("ollama_api_prompt_to_console", False))
+        using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
+        using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
 
-    with gr.Tab("Settings"):
-        
-        with gr.Tab("App"):
-            gr.Markdown("### General Settings")
-            ollama_url = gr.Textbox(label="Ollama URL", value=settings.get("ollama_url", ""))
-            max_tokens_slider = gr.Slider(label="Max Tokens", minimum=1, maximum=3000, step=1, value=settings.get("max_tokens_slider", 1500))
-            ollama_api_prompt_to_console = gr.Checkbox(label="Ollama API Prompt to Console", value=settings.get("ollama_api_prompt_to_console", False))
-            using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
-            using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
-            save_settings_button = gr.Button("Save Settings")
+        gr.Markdown("### Ollama API Options")
+        ollama_api_options_group = gr.Group()
+        ollama_api_options_components = []
+        with ollama_api_options_group:
+            for key, value in ollama_api_options.items():
+                if isinstance(value, bool):
+                    component = gr.Checkbox(label=key, value=value)
+                elif isinstance(value, int):
+                    component = gr.Slider(label=key, minimum=0, maximum=10000, step=1, value=value)
+                elif isinstance(value, float):
+                    component = gr.Slider(label=key, minimum=0.0, maximum=1.0, step=0.01, value=value)
+                else:
+                    component = gr.Textbox(label=key, value=value)
+                ollama_api_options_components.append(component)
 
-            save_settings_button.click(
-                fn=save_settings,
-                inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents],
-                outputs=[gr.Textbox(label="Status", lines=1)]
-            )
+        save_settings_button = gr.Button("Save Settings")
 
-        with gr.Tab("Agent Roles"):
-            gr.Markdown("### agent_roles.json")
-            agent_roles_html = format_json_to_html_table(load_roles('agent_roles.json', 'custom_agent_roles.json', settings))
-            agent_roles_display = gr.HTML(agent_roles_html)
+        save_settings_button.click(
+            fn=save_settings,
+            inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents] + ollama_api_options_components,
+            outputs=[gr.Textbox(label="Status", lines=1)]
+        )
 
-        with gr.Tab("Custom Agent Roles"):
-            gr.Markdown("### Edit Custom Agent Roles")
-            custom_agent_roles = load_json('custom_agent_roles.json')
-            custom_agent_roles_display = gr.JSON(value=custom_agent_roles, label="Custom Agent Roles JSON", visible=False)
-            unsaved_changes_indicator = gr.Markdown("**Unsaved Changes**", visible=False)
+    with gr.Tab("Agent Roles"):
+        gr.Markdown("### agent_roles.json")
+        agent_roles_html = format_json_to_html_table(load_roles('agent_roles.json', 'custom_agent_roles.json', settings))
+        agent_roles_display = gr.HTML(agent_roles_html)
 
-            with gr.Blocks() as custom_agent_roles_block:
-                with gr.Row():
-                    agent_label = gr.Markdown("**Agent/Role**")
-                    #role_label = gr.Markdown("**Role**")
-                agent_role_rows = []
-
-                def create_row(agent, role, custom_agent_roles_display, unsaved_changes_indicator):
-                    with gr.Row() as row:
-                        agent_textbox = gr.Textbox(label="", value=agent, lines=1, scale=1, interactive=True)
-                        role_textbox = gr.Textbox(label="", value=role, lines=3, scale=4, interactive=True)
-                        remove_button = gr.Button("Remove", scale=1, variant="stop")
-
-                        remove_button.click(
-                            fn=remove_agent_role,
-                            inputs=[agent_textbox, role_textbox, custom_agent_roles_display],
-                            outputs=[custom_agent_roles_display, unsaved_changes_indicator]
-                        )
-                    return row
-
-                for agent, role in custom_agent_roles.items():
-                    agent_role_rows.append(create_row(agent, role, custom_agent_roles_display, unsaved_changes_indicator))
-
-                with gr.Row():
-                    new_agent_textbox = gr.Textbox(label="New Agent", lines=1, scale=1, interactive=True)
-                    new_role_textbox = gr.Textbox(label="New Role", lines=3, scale=4, interactive=True)
-                    add_button = gr.Button("Add New Agent Role", scale=1)
-
-                add_button.click(
-                    fn=add_agent_role,
-                    inputs=[new_agent_textbox, new_role_textbox, custom_agent_roles_display, unsaved_changes_indicator],
-                    outputs=[custom_agent_roles_display, new_agent_textbox, new_role_textbox, unsaved_changes_indicator]
-                )
-
-                save_button = gr.Button("Save Custom Agent Roles")
-
-                save_button.click(
-                    fn=save_custom_agent_roles,
-                    inputs=[custom_agent_roles_display, unsaved_changes_indicator],
-                    outputs=[gr.Textbox(label="Status", lines=1), unsaved_changes_indicator]
-                )
+    with gr.Tab("Custom Agent Roles"):
+        gr.Markdown("### custom_agent_roles.json")
+        custom_agent_roles = load_json('custom_agent_roles.json')
+        custom_agent_roles_html = format_json_to_html_table(custom_agent_roles)
+        custom_agent_roles_display = gr.HTML(custom_agent_roles_html)
 
 if __name__ == "__main__":
     demo.launch()

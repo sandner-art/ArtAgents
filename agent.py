@@ -5,16 +5,23 @@ import io
 import base64
 import numpy as np
 
-def load_roles(role_file):
-    with open(role_file, 'r') as file:
-        return json.load(file)
+def load_roles(default_role_file, custom_role_file, settings):
+    roles = {}
+    if settings.get("using_custom_agents", False):
+        with open(custom_role_file, 'r') as file:
+            roles.update(json.load(file))
+    if settings.get("using_default_agents", False):
+        with open(default_role_file, 'r') as file:
+            roles.update(json.load(file))
+    return roles
 
 def load_settings(settings_file):
     with open(settings_file, 'r') as file:
         return json.load(file)
 
 def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_path=None, user_input=None, model_with_vision=None, num_predict=None, single_image=None, limiters_handling_option=None):
-    roles = load_roles('agent_roles.json')
+    settings = load_settings('settings.json')
+    roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
     role_description = roles.get(role, "Unknown Role")
     
     # Construct the prompt for the LLM
@@ -32,9 +39,9 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_pat
         prompt += f"\nImage Captions: {', '.join(image_captions)}"
     
     # Load settings
-    settings = load_settings('settings.json')
     ollama_url = settings.get("ollama_url", "http://localhost:11434/api/generate")
     ollama_api_prompt_to_console = settings.get("ollama_api_prompt_to_console", True)
+    ollama_api_options = settings.get("ollama_api_options", {})
     
     # Log the full prompt and other details to the console
     if ollama_api_prompt_to_console:
@@ -52,7 +59,8 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_pat
     payload = {
         "model": model,  # Use the selected model
         "prompt": prompt,
-        "max_tokens": max_tokens  # Use the specified max tokens
+        "max_tokens": max_tokens,  # Use the specified max tokens
+        "options": ollama_api_options
     }
     
     if images:
