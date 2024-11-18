@@ -162,3 +162,5 @@ cython_debug/
 #.idea/
 full.py
 app_fullproject.txt
+/__pycache__
+*.pyc
