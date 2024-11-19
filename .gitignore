@@ -164,3 +164,4 @@ full.py
 app_fullproject.txt
 /__pycache__
 *.pyc
+/__pycache__
