@@ -196,6 +196,8 @@ with gr.Blocks() as demo:
                         max_tokens = gr.Slider(50, settings.get("max_tokens_slider", 1500), step=10, value=settings.get("max_tokens_slider", 1500) // 2, label="Max Tokens")
                         using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
                         using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
+                        use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))  # Single instance of checkbox
+
             with gr.Column(scale=1):
                 gr.Markdown("### Common Inputs")
                 role_names = list(load_roles('agent_roles.json', 'custom_agent_roles.json', settings).keys())
@@ -212,9 +214,9 @@ with gr.Blocks() as demo:
                 comment_button = gr.Button("Comment")
                 gr.Markdown("sandner.art | [Creative AI/ML Research](https://github.com/sandner-art)")
                 current_session_history_display = gr.Textbox(label="History", lines=15, value="")  # Initialize as empty
+                clear_button = gr.Button("Clear")  # Add Clear button
         is_user_adjusted = gr.State(value=False)
         model_state = gr.State(value=None)  # Add a state to store the model
-        use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))  # Single instance of checkbox
 
         def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
             limiters = load_limiters('limiters.json')
@@ -297,6 +299,16 @@ with gr.Blocks() as demo:
             outputs=[llm_response, current_session_history_display]
         )
 
+        def clear_history():
+            global current_session_history  # Declare current_session_history as a global variable
+            current_session_history = []
+            return ""
+
+        clear_button.click(
+            fn=clear_history,
+            outputs=[current_session_history_display]
+        )
+
     with gr.Tab("App"):
         with gr.Row():
             with gr.Column(scale=1):
@@ -364,7 +376,40 @@ with gr.Blocks() as demo:
     with gr.Tab("History"):
         gr.Markdown("### Interaction History")
         history_display = gr.Textbox(label="Session History", lines=15, value="\n".join(history_list))  # Load initial history
-        history_display.change(fn=lambda hist: hist, inputs=[history_display], outputs=[history_display])  # Ensure history_display updates properly
+        confirmation_message = gr.Textbox(label="Confirmation Message", lines=1, value="Do you really want to clear the Session History?", visible=False)
+        yes_button = gr.Button("Yes", visible=False)
+        no_button = gr.Button("No", visible=False)
+        clear_history_button = gr.Button("Clear History")  # Add Clear History button
+
+        def show_confirmation():
+            return gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
+
+        def hide_confirmation():
+            return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+
+        def clear_session_history():
+            global history_list  # Declare history_list as a global variable
+            history_list = []
+            history.save_history(history_list)  # Save the cleared history to history.json
+            return gr.update(value="\n".join(history_list)), *hide_confirmation()
+
+        clear_history_button.click(
+            fn=show_confirmation,
+            inputs=[],
+            outputs=[confirmation_message, yes_button, no_button]
+        )
+
+        yes_button.click(
+            fn=clear_session_history,
+            inputs=[],
+            outputs=[history_display, confirmation_message, yes_button, no_button]
+        )
+
+        no_button.click(
+            fn=hide_confirmation,
+            inputs=[],
+            outputs=[confirmation_message, yes_button, no_button]
+        )
 
 # Launch the Gradio App
 if __name__ == "__main__":
