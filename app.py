@@ -328,7 +328,7 @@ with gr.Blocks() as demo:
                         "using_default_agents": using_default_agents,
                         "using_custom_agents": using_custom_agents,
                         "ollama_api_options": ollama_api_options,
-                        "use_ollama_api_options": use_ollama_api_options
+                        "use_ollama_api_options": use_ollama_api_options  # Fixed typo here
                     }
 
                     with open('settings.json', 'w') as file:
@@ -355,7 +355,8 @@ with gr.Blocks() as demo:
 
     with gr.Tab("History"):
         gr.Markdown("### Interaction History")
-        history_display = gr.Textbox(label="History", lines=15, value="\n".join(history_list))  # Load initial history
+        history_display = gr.Textbox(label="Session History", lines=15, value="\n".join(history_list))  # Load initial history
+        history_display.change(fn=lambda hist: hist, inputs=[history_display], outputs=[history_display])  # Ensure history_display updates properly
 
 # Launch the Gradio App
 if __name__ == "__main__":

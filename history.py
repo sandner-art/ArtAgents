@@ -13,13 +13,14 @@ def load_history():
                 content = file.read()
                 # Check if the file is empty
                 if content.strip():
-                    return json.load(file)
+                    return json.loads(content)
                 else:
                     # Return an empty list if the file is empty
+                    print(f"Warning: {HISTORY_FILE} is empty. Initializing an empty history.")
                     return []
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # Handle the case where the file contains invalid JSON
-                print(f"Warning: {HISTORY_FILE} contains invalid JSON. Initializing an empty history.")
+                print(f"Error: {HISTORY_FILE} contains invalid JSON. {str(e)}. Initializing an empty history.")
                 return []
     return []
 
