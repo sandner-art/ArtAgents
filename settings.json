@@ -6,23 +6,23 @@
     "using_custom_agents": false,
     "ollama_api_options": {
         "num_keep": 5,
-        "seed": 42,
+        "seed": 43,
         "num_predict": 800,
         "top_k": 20,
         "top_p": 0.9,
-        "min_p": 0.0,
+        "min_p": 0,
         "tfs_z": 0.5,
         "typical_p": 0.7,
         "repeat_last_n": 33,
         "temperature": 0.8,
         "repeat_penalty": 1.2,
         "presence_penalty": 1.5,
-        "frequency_penalty": 1.0,
+        "frequency_penalty": 1,
         "mirostat": 1,
         "mirostat_tau": 0.8,
         "mirostat_eta": 0.6,
         "penalize_newline": true,
-        "stop": ["\n\n\n", "user:"],
+        "stop": "['\\n\\n\\n', 'user:']",
         "numa": false,
         "num_ctx": 8192,
         "num_batch": 4096,
@@ -33,5 +33,6 @@
         "use_mmap": true,
         "use_mlock": false,
         "num_thread": 24
-    }
+    },
+    "use_ollama_api_options": false
 }

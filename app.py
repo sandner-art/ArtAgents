@@ -196,8 +196,6 @@ with gr.Blocks() as demo:
                         max_tokens = gr.Slider(50, settings.get("max_tokens_slider", 1500), step=10, value=settings.get("max_tokens_slider", 1500) // 2, label="Max Tokens")
                         using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
                         using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
-                        use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))  # Single instance of checkbox
-
             with gr.Column(scale=1):
                 gr.Markdown("### Common Inputs")
                 role_names = list(load_roles('agent_roles.json', 'custom_agent_roles.json', settings).keys())
@@ -216,6 +214,7 @@ with gr.Blocks() as demo:
                 current_session_history_display = gr.Textbox(label="History", lines=15, value="")  # Initialize as empty
         is_user_adjusted = gr.State(value=False)
         model_state = gr.State(value=None)  # Add a state to store the model
+        use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))  # Single instance of checkbox
 
         def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
             limiters = load_limiters('limiters.json')
@@ -327,22 +326,21 @@ with gr.Blocks() as demo:
                 save_settings_button = gr.Button("Save Settings")
 
                 def save_settings(ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, use_ollama_api_options, *ollama_api_options_values):
-                    ollama_api_options = {}
-                    for key, value in zip(settings.get("ollama_api_options", {}).keys(), ollama_api_options_values):
-                        ollama_api_options[key] = value
-
-                    settings = {
+                    updated_settings = {
                         "ollama_url": ollama_url,
                         "max_tokens_slider": max_tokens_slider,
                         "ollama_api_prompt_to_console": ollama_api_prompt_to_console,
                         "using_default_agents": using_default_agents,
                         "using_custom_agents": using_custom_agents,
-                        "ollama_api_options": ollama_api_options,
-                        "use_ollama_api_options": use_ollama_api_options  # Fixed typo here
+                        "ollama_api_options": {},
+                        "use_ollama_api_options": use_ollama_api_options
                     }
 
+                    for key, value in zip(settings.get("ollama_api_options", {}).keys(), ollama_api_options_values):
+                        updated_settings["ollama_api_options"][key] = value
+
                     with open('settings.json', 'w') as file:
-                        json.dump(settings, file, indent=4)
+                        json.dump(updated_settings, file, indent=4)
 
                     return "Settings saved successfully."
 
