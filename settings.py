@@ -31,14 +31,15 @@ def format_json_to_html_table(data):
     html = "<table style='width:100%; border-collapse: collapse;'>"
     html += "<tr><th style='border: 1px solid #ddd; padding: 8px;'>Agent</th><th style='border: 1px solid #ddd; padding: 8px;'>Role</th></tr>"
     for agent, role in data.items():
-        html += f"<tr><td style='border: 1px solid #ddd; padding: 8px;'>{agent}</td><td style='border: 1px solid #ddd; padding: 8px; word-wrap: break-word;'>{role}</td></tr>"
+        html += f"<tr><td style='border: 1px solid #ddd; padding: 8px;'>{agent}</td><td style='border: 1px solid #ddd; padding: 8px; word-wrap: break-word;'>{role.get('description', 'Unknown Role')}</td></tr>"
     html += "</table>"
     return html
 
 # Function to remove an agent role
 def remove_agent_role(agent_textbox, role_textbox, custom_agent_roles_display):
     agent = agent_textbox
-    custom_agent_roles = custom_agent_roles_display  # Directly access the dictionary
+    custom_agent_roles = custom_agent_roles_display  # Directly access the handling:
+
     if agent in custom_agent_roles:
         del custom_agent_roles[agent]
     return gr.update(value=custom_agent_roles), gr.update(visible=True)
@@ -48,8 +49,9 @@ def add_agent_role(agent_textbox, role_textbox, custom_agent_roles_display, unsa
     agent = agent_textbox
     role = role_textbox
     custom_agent_roles = custom_agent_roles_display  # Directly access the dictionary
+
     if agent and role:
-        custom_agent_roles[agent] = role
+        custom_agent_roles[agent] = {"description": role, "ollama_api_options": {}}  # Initialize with empty options if needed
     return gr.update(value=custom_agent_roles), "", "", gr.update(visible=True)
 
 # Function to save custom agent roles
