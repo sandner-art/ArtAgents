@@ -43,15 +43,16 @@ def update_max_tokens(limiter_handling_option, user_set_max_tokens, is_user_adju
 # Part 2: Chat Functionality
 def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options):
     global history_list  # Declare history_list as a global variable
+    global current_session_history  # Declare current_session_history as a global variable
 
     model = next((m["name"] for m in models if f"{m['name']} (VISION)" == model_with_vision or m["name"] == model_with_vision), None)
 
     if model is None:
-        return "Error: Selected model not found.", "\n".join(history_list), model
+        return "Error: Selected model not found.", "\n".join(current_session_history), model
 
     model_info = next((m for m in models if m["name"] == model), None)
     if model_info is None:
-        return "Error: Model information not found.", "\n".join(history_list), model
+        return "Error: Model information not found.", "\n".join(current_session_history), model
 
     limiter_settings = limiters.get(limiters_handling_option, {})
     limiter_prompt_format = limiter_settings.get("limiter_prompt_format", "")
@@ -102,6 +103,7 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
             confirmation_messages.append(f"Created new file: {output_file}\n")
 
         history_list.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
+        current_session_history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
         history_list = history.add_to_history(history_list, f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
 
     if not folder_path.strip() or not os.path.isdir(folder_path):
@@ -112,14 +114,16 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
             response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option, ollama_api_options)
 
         history_list.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
+        current_session_history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
         history_list = history.add_to_history(history_list, f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
-        return response, "\n".join(history_list), model
+        return response, "\n".join(current_session_history), model
 
     if not model_info["vision"]:
         response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option, ollama_api_options)
         history_list.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
+        current_session_history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
         history_list = history.add_to_history(history_list, f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
-        return response, "\n".join(history_list), model
+        return response, "\n".join(current_session_history), model
 
     for file_name in os.listdir(folder_path):
         file_path = os.path.join(folder_path, file_name)
@@ -129,15 +133,16 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
             process_image(image, file_path)
 
     if not confirmation_messages:
-        return "No valid image files found in the directory.", "\n".join(history_list), model
+        return "No valid image files found in the directory.", "\n".join(current_session_history), model
 
-    return "\n".join(confirmation_messages), "\n".join(history_list), model
+    return "\n".join(confirmation_messages), "\n".join(current_session_history), model
 
 def handle_comment(llm_response, comment, model, settings, use_ollama_api_options, max_tokens_slider_value):
     global history_list  # Declare history_list as a global variable
+    global current_session_history  # Declare current_session_history as a global variable
 
     if not comment:
-        return llm_response, "\n".join(history_list)
+        return llm_response, "\n".join(current_session_history)
 
     roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
     role = "User"  # Assuming user role for comment
@@ -154,8 +159,9 @@ def handle_comment(llm_response, comment, model, settings, use_ollama_api_option
 
     response = get_llm_response(role, prompt, model, [], max_tokens_slider_value, None, comment, None, max_tokens_slider_value, None, "Off", ollama_api_options)
     history_list.append(f"User Comment: {comment}\nResponse: {response}\n")
+    current_session_history.append(f"User Comment: {comment}\nResponse: {response}\n")
     history_list = history.add_to_history(history_list, f"User Comment: {comment}\nResponse: {response}\n")
-    return response, "\n".join(history_list)
+    return response, "\n".join(current_session_history)
 
 # Part 3: Load Settings and Initialize Components
 # Load models, limiters, and settings
@@ -166,6 +172,7 @@ settings = load_settings('settings.json')
 
 # Initialize history
 history_list = history.load_history()  # Load history from file
+current_session_history = []  # Initialize current session history as empty
 
 # Load default and custom agent roles
 roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
@@ -189,6 +196,8 @@ with gr.Blocks() as demo:
                         max_tokens = gr.Slider(50, settings.get("max_tokens_slider", 1500), step=10, value=settings.get("max_tokens_slider", 1500) // 2, label="Max Tokens")
                         using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
                         using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
+                        use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))  # Single instance of checkbox
+
             with gr.Column(scale=1):
                 gr.Markdown("### Common Inputs")
                 role_names = list(load_roles('agent_roles.json', 'custom_agent_roles.json', settings).keys())
@@ -204,10 +213,9 @@ with gr.Blocks() as demo:
                 comment_input = gr.Textbox(label="Comment", lines=2)
                 comment_button = gr.Button("Comment")
                 gr.Markdown("sandner.art | [Creative AI/ML Research](https://github.com/sandner-art)")
-                history_display = gr.Textbox(label="History", lines=15, value="\n".join(history_list))  # Load initial history
+                current_session_history_display = gr.Textbox(label="History", lines=15, value="")  # Initialize as empty
         is_user_adjusted = gr.State(value=False)
         model_state = gr.State(value=None)  # Add a state to store the model
-        use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))  # Single instance of checkbox
 
         def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
             limiters = load_limiters('limiters.json')
@@ -249,20 +257,21 @@ with gr.Blocks() as demo:
 
         def chat_with_model(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options):
             response, hist, model = chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options)
-            history_display.value = hist  # Update history display
+            current_session_history_display.value = hist  # Update history display
             return response, hist, model
 
         submit_button.click(
             fn=chat_with_model,
             inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image_display, gr.State(settings), use_ollama_api_options],
-            outputs=[llm_response, history_display, model_state]
+            outputs=[llm_response, current_session_history_display, model_state]
         )
 
         def handle_comment(llm_response, comment, model, settings, use_ollama_api_options, max_tokens_slider_value):
             global history_list  # Declare history_list as a global variable
+            global current_session_history  # Declare current_session_history as a global variable
 
             if not comment:
-                return llm_response, "\n".join(history_list)
+                return llm_response, "\n".join(current_session_history)
 
             roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
             role = "User"  # Assuming user role for comment
@@ -279,13 +288,14 @@ with gr.Blocks() as demo:
 
             response = get_llm_response(role, prompt, model, [], max_tokens_slider_value, None, comment, None, max_tokens_slider_value, None, "Off", ollama_api_options)
             history_list.append(f"User Comment: {comment}\nResponse: {response}\n")
+            current_session_history.append(f"User Comment: {comment}\nResponse: {response}\n")
             history_list = history.add_to_history(history_list, f"User Comment: {comment}\nResponse: {response}\n")
-            return response, "\n".join(history_list)
+            return response, "\n".join(current_session_history)
 
         comment_button.click(
             fn=handle_comment,
             inputs=[llm_response, comment_input, model_state, gr.State(settings), use_ollama_api_options, max_tokens],
-            outputs=[llm_response, history_display]
+            outputs=[llm_response, current_session_history_display]
         )
 
     with gr.Tab("App"):
