@@ -1,3 +1,4 @@
+# agent.py
 import json
 import requests
 from PIL import Image
@@ -19,29 +20,25 @@ def load_settings(settings_file):
     with open(settings_file, 'r') as file:
         return json.load(file)
 
-def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_path=None, user_input=None, model_with_vision=None, num_predict=None, single_image=None, limiters_handling_option=None):
+def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_path=None, user_input=None, model_with_vision=None, num_predict=None, single_image=None, limiters_handling_option=None, ollama_api_options=None):
     settings = load_settings('settings.json')
     roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
-    role_description = roles.get(role, "Unknown Role")
-    
+    role_description = roles.get(role, {}).get("description", "Unknown Role")
+    role_settings = roles.get(role, {}).get("ollama_api_options", {})
+
     # Construct the prompt for the LLM
     if images:
-        # Convert images to base64
-        image_captions = []
-        image_data = []
-        for i, image in enumerate(images):
-            buffered = io.BytesIO()
-            image.save(buffered, format="JPEG")
-            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            image_data.append(img_str)
-            image_captions.append(f"Caption for image {i+1}: This is a description of the uploaded image {i+1}.")
-        
+        image_captions = [f"Caption for image {i+1}: This is a description of the uploaded image {i+1}." for i in range(len(images))]
         prompt += f"\nImage Captions: {', '.join(image_captions)}"
     
     # Load settings
     ollama_url = settings.get("ollama_url", "http://localhost:11434/api/generate")
     ollama_api_prompt_to_console = settings.get("ollama_api_prompt_to_console", True)
-    ollama_api_options = settings.get("ollama_api_options", {})
+    
+    # Merge Ollama API options with role-specific options
+    if ollama_api_options is None:
+        ollama_api_options = settings.get("ollama_api_options", {})
+    ollama_api_options.update(role_settings)
     
     # Log the full prompt and other details to the console
     if ollama_api_prompt_to_console:
@@ -51,7 +48,8 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_pat
             "num_predict": max_tokens,  # Use max_tokens as num_predict
             "image_file": "single_image" if isinstance(single_image, np.ndarray) else None,
             "text_caption": file_path if file_path else None,
-            "prompt": prompt
+            "prompt": prompt,
+            "ollama_api_options": ollama_api_options
         }
         print(json.dumps(log_details, indent=4))
     
@@ -64,6 +62,12 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_pat
     }
     
     if images:
+        image_data = []
+        for i, image in enumerate(images):
+            buffered = io.BytesIO()
+            image.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            image_data.append(img_str)
         payload["images"] = image_data
     
     try:
