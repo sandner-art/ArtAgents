@@ -6,9 +6,9 @@ Prototype framework for LLM based captioning and prompt engineering experiments 
 ## Overview
 Select an agent, a model, and provide input to get a response from any model served by Ollama. You can provide a folder path of images for multimodal input. Create prompts and combine the text with visuals for captioning or image generation. 
 
-Use either a folder of images (1) or one image (2) to experiment with text or multimodal LLMs. Finetune your text prompt output or caption using agents in dedicated roles and user input (3). Try limiters to adjust the prompts even more. 
+Use either a folder of images (1) or one image (2) to experiment with text or multimodal LLMs. Fine-tune  your text prompt output on one image or caption folders using agents in dedicated roles and user input (3). Comment (4) on the output to change the result color scheme, materials, or a setting. Try limiters to adjust the prompts even more. 
 
-![art-agent-screen](https://github.com/user-attachments/assets/b56ba489-c3e3-4a9a-a4b1-6ccb2d89e23d)
+![artagents-numbers](https://github.com/user-attachments/assets/ea0f8d00-646b-4a73-97ca-e1938b534d2d)
 
 ## Installation
 1. Install Ollama https://ollama.com/
@@ -39,7 +39,8 @@ Use either a folder of images (1) or one image (2) to experiment with text or mu
 - [ ] Custom Agents Properties
 - [ ] Custom Model Limiters and Agents (for a specific LLM)
 - [ ] API parameters finetune, profiles
-- [ ] Comment Input
+- [x] Comment Input
+- [x] Chat History
 - [ ] Multimodal Chat History
 - [ ] Agent Training 
 
