@@ -1,3 +1,4 @@
+# agent.py
 import json
 import requests
 from PIL import Image
@@ -27,16 +28,7 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_pat
 
     # Construct the prompt for the LLM
     if images:
-        # Convert images to base64
-        image_captions = []
-        image_data = []
-        for i, image in enumerate(images):
-            buffered = io.BytesIO()
-            image.save(buffered, format="JPEG")
-            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            image_data.append(img_str)
-            image_captions.append(f"Caption for image {i+1}: This is a description of the uploaded image {i+1}.")
-        
+        image_captions = [f"Caption for image {i+1}: This is a description of the uploaded image {i+1}." for i in range(len(images))]
         prompt += f"\nImage Captions: {', '.join(image_captions)}"
     
     # Load settings
@@ -70,6 +62,12 @@ def get_llm_response(role, prompt, model, images=None, max_tokens=1500, file_pat
     }
     
     if images:
+        image_data = []
+        for i, image in enumerate(images):
+            buffered = io.BytesIO()
+            image.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            image_data.append(img_str)
         payload["images"] = image_data
     
     try:

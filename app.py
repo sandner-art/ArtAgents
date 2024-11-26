@@ -1,4 +1,4 @@
-# Part 1: Imports and Initial Setup
+# app.py
 import gradio as gr
 import json
 import os
@@ -32,11 +32,11 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
     model = next((m["name"] for m in models if f"{m['name']} (VISION)" == model_with_vision or m["name"] == model_with_vision), None)
 
     if model is None:
-        return "Error: Selected model not found."
+        return "Error: Selected model not found.", "\n".join(history), model
 
     model_info = next((m for m in models if m["name"] == model), None)
     if model_info is None:
-        return "Error: Model information not found."
+        return "Error: Model information not found.", "\n".join(history), model
 
     limiters = load_limiters('limiters.json')
     limiter_settings = limiters.get(limiters_handling_option, {})
@@ -97,12 +97,12 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
             response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option, ollama_api_options)
 
         history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
-        return response, "\n".join(history)
+        return response, "\n".join(history), model
 
     if not model_info["vision"]:
         response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option, ollama_api_options)
         history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
-        return response, "\n".join(history)
+        return response, "\n".join(history), model
 
     for file_name in os.listdir(folder_path):
         file_path = os.path.join(folder_path, file_name)
@@ -112,11 +112,11 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
             process_image(image, file_path)
 
     if not confirmation_messages:
-        return "No valid image files found in the directory.", "\n".join(history)
+        return "No valid image files found in the directory.", "\n".join(history), model
 
-    return "\n".join(confirmation_messages), "\n".join(history)
+    return "\n".join(confirmation_messages), "\n".join(history), model
 
-def comment_on_response(llm_response, comment, settings, use_ollama_api_options):
+def comment_on_response(llm_response, comment, model, settings, use_ollama_api_options):
     if not comment:
         return llm_response, "\n".join(history)
 
@@ -133,7 +133,8 @@ def comment_on_response(llm_response, comment, settings, use_ollama_api_options)
     else:
         ollama_api_options = {}
 
-    response = get_llm_response(role, prompt, model, [], max_tokens_slider, None, user_input, model_with_vision, max_tokens_slider, None, "Off", ollama_api_options)
+    # Ensure only serializable data is passed to get_llm_response
+    response = get_llm_response(role, prompt, model, [], max_tokens_slider, None, comment, None, max_tokens_slider, None, "Off", ollama_api_options)
     history.append(f"User Comment: {comment}\nResponse: {response}\n")
     return response, "\n".join(history)
 
@@ -172,6 +173,7 @@ def update_role_dropdown(using_default_agents, using_custom_agents):
     roles = load_roles('agent_roles.json', 'custom_agent_roles.json', {"using_default_agents": using_default_agents, "using_custom_agents": using_custom_agents})
     role_names = list(roles.keys())
     return gr.update(choices=role_names, value=role_names[0] if role_names else None)
+
 # Part 2: Gradio Interface Setup
 with gr.Blocks() as demo:
     gr.Markdown("# ArtAgents | Agent-Based Chat with Ollama")
@@ -208,6 +210,7 @@ with gr.Blocks() as demo:
                 gr.Markdown("sandner.art | [Creative AI/ML Research](https://github.com/sandner-art)")
                 history_display = gr.Textbox(label="History", lines=15)  # Define history_display here
         is_user_adjusted = gr.State(value=False)
+        model_state = gr.State(value=None)  # Add a state to store the model
 
         def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
             limiters = load_limiters('limiters.json')
@@ -242,15 +245,41 @@ with gr.Blocks() as demo:
             outputs=[role]
         )
 
+        def chat_with_model(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options):
+            response, hist, model = chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options)
+            return response, hist, model
+
         submit_button.click(
-            chat,
+            fn=chat_with_model,
             inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image_display, gr.State(settings), gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))],
-            outputs=[llm_response, history_display]
+            outputs=[llm_response, history_display, model_state]
         )
 
+        def comment_on_response(llm_response, comment, model, settings, use_ollama_api_options, max_tokens_slider_value):
+            if not comment:
+                return llm_response, "\n".join(history)
+
+            roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
+            role = "User"  # Assuming user role for comment
+            role_description = roles.get(role, {}).get("description", "Unknown Role")
+            role_settings = roles.get(role, {}).get("ollama_api_options", {})
+
+            prompt = f"LLM Response: {llm_response}\n\nUser Comment: {comment}\n\nRole: {role}\nDescription: {role_description}\n"
+
+            if use_ollama_api_options:
+                ollama_api_options = settings.get("ollama_api_options", {})
+                ollama_api_options.update(role_settings)
+            else:
+                ollama_api_options = {}
+
+            # Ensure only serializable data is passed to get_llm_response
+            response = get_llm_response(role, prompt, model, [], max_tokens_slider_value, None, comment, None, max_tokens_slider_value, None, "Off", ollama_api_options)
+            history.append(f"User Comment: {comment}\nResponse: {response}\n")
+            return response, "\n".join(history)
+
         comment_button.click(
-            comment_on_response,
-            inputs=[llm_response, comment_input, gr.State(settings), gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))],
+            fn=comment_on_response,
+            inputs=[llm_response, comment_input, model_state, gr.State(settings), gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False)), max_tokens],
             outputs=[llm_response, history_display]
         )
 
@@ -260,7 +289,7 @@ with gr.Blocks() as demo:
                 gr.Markdown("### General Settings")
                 ollama_url = gr.Textbox(label="Ollama URL", value=settings.get("ollama_url", ""))
                 max_tokens_slider = gr.Slider(label="Max Tokens", minimum=1, maximum=3000, step=1, value=settings.get("max_tokens_slider", 1500))
-                ollama_api_prompt_to_console = gr.Checkbox(label="Ollama API Prompt to Console", value=settings.get("ollama_api_prompt_to_console", False))
+                ollama_api_prompt_to_console = gr.Checkbox(label="Ollama API Prompt to Console", value=settings.get("ollama_api_prompt_to_console", True))
                 using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
                 using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
                 use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))
