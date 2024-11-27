@@ -38,6 +38,7 @@ Use either a folder of images (1) or one image (2) to experiment with text or mu
 - [x] Editable Default Agents
 - [ ] Custom Agents Properties
 - [ ] Custom Model Limiters and Agents (for a specific LLM)
+- [ ] Use Ollama API Options (full functionality)
 - [ ] API parameters finetune, profiles
 - [x] Comment Input
 - [x] Chat History
