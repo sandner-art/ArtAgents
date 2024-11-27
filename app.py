@@ -240,7 +240,13 @@ with gr.Blocks() as demo:
         )
 
         def update_role_dropdown(using_default_agents, using_custom_agents):
-            roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
+            roles = {}
+            if using_default_agents:
+                with open('agent_roles.json', 'r') as file:
+                    roles.update(json.load(file))
+            if using_custom_agents:
+                with open('custom_agent_roles.json', 'r') as file:
+                    roles.update(json.load(file))
             role_names = list(roles.keys())
             return gr.update(choices=role_names, value=role_names[0] if role_names else None)
 
