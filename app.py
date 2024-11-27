@@ -178,7 +178,7 @@ current_session_history = []  # Initialize current session history as empty
 roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
 
 # Part 4: Gradio Interface Setup
-with gr.Blocks() as demo:
+with gr.Blocks(title="ArtAgents") as demo:
     gr.Markdown("# ArtAgents | Agent-Based Chat with Ollama")
     gr.Markdown("Select an agent, model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input.")
 
