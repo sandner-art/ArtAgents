@@ -178,7 +178,7 @@ current_session_history = []  # Initialize current session history as empty
 roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
 
 # Part 4: Gradio Interface Setup
-with gr.Blocks() as demo:
+with gr.Blocks(title="ArtAgents") as demo:
     gr.Markdown("# ArtAgents | Agent-Based Chat with Ollama")
     gr.Markdown("Select an agent, model, and provide input to get a response from Ollama. You can provide a folder path of images for multimodal input.")
 
@@ -240,7 +240,13 @@ with gr.Blocks() as demo:
         )
 
         def update_role_dropdown(using_default_agents, using_custom_agents):
-            roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
+            roles = {}
+            if using_default_agents:
+                with open('agent_roles.json', 'r') as file:
+                    roles.update(json.load(file))
+            if using_custom_agents:
+                with open('custom_agent_roles.json', 'r') as file:
+                    roles.update(json.load(file))
             role_names = list(roles.keys())
             return gr.update(choices=role_names, value=role_names[0] if role_names else None)
 
