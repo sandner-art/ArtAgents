@@ -9,6 +9,7 @@ from agent import get_llm_response, load_roles
 import numpy as np
 import history  # Import the history module
 from settings import format_json_to_html_table  # Import the format_json_to_html_table function
+import requests
 
 # Load JSON files
 def load_json(file_path):
@@ -40,8 +41,30 @@ def update_max_tokens(limiter_handling_option, user_set_max_tokens, is_user_adju
 
     return limiter_token_slider
 
+# Function to release all Ollama models from memory
+def release_all_models():
+    settings = load_settings('settings.json')
+    ollama_url = settings.get("ollama_url", "http://localhost:11434/api/generate")
+    models = load_models('models.json')
+
+    for model in models:
+        release_model(model['name'], ollama_url)
+
+    return "All models released from memory."
+
+# Function to release a specific model from memory
+def release_model(model_name, ollama_url):
+    unload_url = f"{ollama_url}"
+    payload = {"model": model_name, "keep_alive": 0}
+    try:
+        response = requests.post(unload_url, json=payload)
+        response.raise_for_status()
+        return f"Model {model_name} released from memory."
+    except requests.RequestException as e:
+        return f"Error releasing model {model_name}: {e}"
+
 # Part 2: Chat Functionality
-def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options):
+def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model):
     global history_list  # Declare history_list as a global variable
     global current_session_history  # Declare current_session_history as a global variable
 
@@ -53,6 +76,9 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
     model_info = next((m for m in models if m["name"] == model), None)
     if model_info is None:
         return "Error: Model information not found.", "\n".join(current_session_history), model
+
+    if release_model_on_change and current_model and current_model != model:
+        release_model(current_model, settings.get("ollama_url", "http://localhost:11434/api/generate"))
 
     limiter_settings = limiters.get(limiters_handling_option, {})
     limiter_prompt_format = limiter_settings.get("limiter_prompt_format", "")
@@ -217,6 +243,7 @@ with gr.Blocks(title="ArtAgents") as demo:
                 clear_button = gr.Button("Clear")  # Add Clear button
         is_user_adjusted = gr.State(value=False)
         model_state = gr.State(value=None)  # Add a state to store the model
+        current_model_state = gr.State(value=None)  # Add a state to store the current model
 
         def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
             limiters = load_limiters('limiters.json')
@@ -262,15 +289,15 @@ with gr.Blocks(title="ArtAgents") as demo:
             outputs=[role]
         )
 
-        def chat_with_model(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options):
-            response, hist, model = chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options)
+        def chat_with_model(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model):
+            response, hist, model = chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model)
             current_session_history_display.value = hist  # Update history display
-            return response, hist, model
+            return response, hist, model, model
 
         submit_button.click(
             fn=chat_with_model,
-            inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image_display, gr.State(settings), use_ollama_api_options],
-            outputs=[llm_response, current_session_history_display, model_state]
+            inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image_display, gr.State(settings), use_ollama_api_options, gr.State(settings.get("release_model_on_change", False)), current_model_state],
+            outputs=[llm_response, current_session_history_display, model_state, current_model_state]
         )
 
         def handle_comment(llm_response, comment, model, settings, use_ollama_api_options, max_tokens_slider_value):
@@ -325,6 +352,12 @@ with gr.Blocks(title="ArtAgents") as demo:
                 using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
                 using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
                 use_ollama_api_options = gr.Checkbox(label="Use Ollama API Options", value=settings.get("use_ollama_api_options", False))
+                release_model_on_change = gr.Checkbox(label="Release Model on Change", value=settings.get("release_model_on_change", False))  # Add the checkbox
+                release_models_button = gr.Button("Release Ollama Models")  # Add the button
+                release_models_button.click(
+                    fn=release_all_models,
+                    outputs=[gr.Textbox(label="Status", lines=1)]
+                )                
             with gr.Column(scale=1):
                 gr.Markdown("### Ollama API Options")
                 ollama_api_options_group = gr.Group()
@@ -343,7 +376,7 @@ with gr.Blocks(title="ArtAgents") as demo:
 
                 save_settings_button = gr.Button("Save Settings")
 
-                def save_settings(ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, use_ollama_api_options, *ollama_api_options_values):
+                def save_settings(ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, use_ollama_api_options, release_model_on_change, *ollama_api_options_values):
                     updated_settings = {
                         "ollama_url": ollama_url,
                         "max_tokens_slider": max_tokens_slider,
@@ -351,7 +384,8 @@ with gr.Blocks(title="ArtAgents") as demo:
                         "using_default_agents": using_default_agents,
                         "using_custom_agents": using_custom_agents,
                         "ollama_api_options": {},
-                        "use_ollama_api_options": use_ollama_api_options
+                        "use_ollama_api_options": use_ollama_api_options,
+                        "release_model_on_change": release_model_on_change  # Save the checkbox state
                     }
 
                     for key, value in zip(settings.get("ollama_api_options", {}).keys(), ollama_api_options_values):
@@ -364,9 +398,11 @@ with gr.Blocks(title="ArtAgents") as demo:
 
                 save_settings_button.click(
                     fn=save_settings,
-                    inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, use_ollama_api_options] + ollama_api_options_components,
+                    inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, use_ollama_api_options, release_model_on_change] + ollama_api_options_components,
                     outputs=[gr.Textbox(label="Status", lines=1)]
                 )
+
+
 
     with gr.Tab("Agent Roles"):
         gr.Markdown("### agent_roles.json")
@@ -416,6 +452,14 @@ with gr.Blocks(title="ArtAgents") as demo:
             inputs=[],
             outputs=[confirmation_message, yes_button, no_button]
         )
+
+# Release all models when the app is closed
+import atexit
+
+def release_all_models_on_exit():
+    release_all_models()
+
+atexit.register(release_all_models_on_exit)
 
 # Launch the Gradio App
 if __name__ == "__main__":

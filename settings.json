@@ -33,5 +33,6 @@
         "use_mlock": false,
         "num_thread": 24
     },
-    "use_ollama_api_options": false
+    "use_ollama_api_options": false,
+    "release_model_on_change": true
 }
