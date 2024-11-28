@@ -22,7 +22,6 @@
         "mirostat_tau": 0.8,
         "mirostat_eta": 0.6,
         "penalize_newline": true,
-        "stop": "['\\n\\n\\n', 'user:']",
         "numa": false,
         "num_ctx": 8192,
         "num_batch": 4096,
@@ -30,7 +29,7 @@
         "main_gpu": 0,
         "low_vram": false,
         "vocab_only": false,
-        "use_mmap": true,
+        "use_mmap": false,
         "use_mlock": false,
         "num_thread": 24
     },
