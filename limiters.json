@@ -5,7 +5,7 @@
     },
     "XL": {
         "limiter_token_slider": 225,
-        "limiter_prompt_format": "Use descriptive tags for descriptions and subjects, use commas and and sigle dot to structure your output, use shorter descriptions of a scene, adjectives, descriptors, you may use dashes for combined words, the reply shall used for generative art stable diffusion and SDXL. Do not use asterisks or special interpuction symbols. Avoid comments, opinions, adlib recommendations, symbols or formatting in your reply.\n"
+        "limiter_prompt_format": "Use descriptive tags for descriptions and subjects, use commas and sigle dot to structure your output, use shorter descriptions of a scene, adjectives, descriptors, you may use dashes for combined words, the reply shall used for generative art stable diffusion and SDXL. Do not use asterisks or special interpuction symbols. Avoid comments, opinions, adlib recommendations, symbols or formatting in your reply.\n"
     },
     "SD3.5": {
         "limiter_token_slider": 350,
