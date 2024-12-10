@@ -203,6 +203,45 @@ current_session_history = []  # Initialize current session history as empty
 # Load default and custom agent roles
 roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
 
+# Function to list image files and their captions
+def list_images_and_captions(folder_path):
+    if not os.path.isdir(folder_path):
+        return [], []
+    image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif']
+    image_caption_pairs = []
+    image_paths = []
+    captions = []
+    for filename in os.listdir(folder_path):
+        name, ext = os.path.splitext(filename)
+        if ext.lower() in image_extensions:
+            image_path = os.path.join(folder_path, filename)
+            caption_path = os.path.join(folder_path, name + '.txt')
+            if os.path.exists(caption_path):
+                with open(caption_path, 'r', encoding='utf-8') as f:
+                    caption = f.read()
+            else:
+                caption = ''
+            image_paths.append(image_path)
+            captions.append(caption)
+    return image_paths, captions
+
+# Function to save all captions
+def save_all_captions(folder_path, captions):
+    for i, caption in enumerate(captions):
+        name = os.path.splitext(os.path.basename(image_paths[i]))[0]
+        caption_path = os.path.join(folder_path, name + '.txt')
+        with open(caption_path, 'w', encoding='utf-8') as f:
+            f.write(caption)
+    return "All captions saved successfully."
+
+# Function to prepend or append text to captions
+def batch_edit_captions(captions, text, mode):
+    if mode == "Prepend":
+        return [text + caption for caption in captions]
+    elif mode == "Append":
+        return [caption + text for caption in captions]
+    return captions
+
 # Part 4: Gradio Interface Setup
 with gr.Blocks(title="ArtAgents") as demo:
     gr.Markdown("# ArtAgents | Agent-Based Chat with Ollama")
@@ -357,7 +396,7 @@ with gr.Blocks(title="ArtAgents") as demo:
                 release_models_button.click(
                     fn=release_all_models,
                     outputs=[gr.Textbox(label="Status", lines=1)]
-                )                
+                )
             with gr.Column(scale=1):
                 gr.Markdown("### Ollama API Options")
                 ollama_api_options_group = gr.Group()
@@ -401,8 +440,6 @@ with gr.Blocks(title="ArtAgents") as demo:
                     inputs=[ollama_url, max_tokens_slider, ollama_api_prompt_to_console, using_default_agents, using_custom_agents, use_ollama_api_options, release_model_on_change] + ollama_api_options_components,
                     outputs=[gr.Textbox(label="Status", lines=1)]
                 )
-
-
 
     with gr.Tab("Agent Roles"):
         gr.Markdown("### agent_roles.json")
@@ -451,6 +488,46 @@ with gr.Blocks(title="ArtAgents") as demo:
             fn=hide_confirmation,
             inputs=[],
             outputs=[confirmation_message, yes_button, no_button]
+        )
+
+    with gr.Tab("Captions"):
+        with gr.Row():
+            folder_path = gr.Textbox(label="Folder Path")
+            load_button = gr.Button("Load Images and Captions")
+            save_all_button = gr.Button("Save All Captions")
+            batch_edit_text = gr.Textbox(label="Text to Add")
+            prepend_button = gr.Button("Prepend to All")
+            append_button = gr.Button("Append to All")
+
+        with gr.Row():
+            image_caption_pairs = gr.State([])
+            captions = gr.State([])
+            image_paths = gr.State([])
+            image_gallery = gr.Gallery(label="Images and Captions", object_fit="contain", height="auto")
+            caption_display = gr.Textbox(label="Captions", lines=15, value="")
+
+        load_button.click(
+            fn=list_images_and_captions,
+            inputs=[folder_path],
+            outputs=[image_paths, captions, image_gallery, caption_display]
+        )
+
+        save_all_button.click(
+            fn=save_all_captions,
+            inputs=[folder_path, captions],
+            outputs=[gr.Textbox(label="Status", lines=1)]
+        )
+
+        prepend_button.click(
+            fn=batch_edit_captions,
+            inputs=[captions, batch_edit_text, gr.Textbox(value="Prepend")],
+            outputs=[captions, caption_display]
+        )
+
+        append_button.click(
+            fn=batch_edit_captions,
+            inputs=[captions, batch_edit_text, gr.Textbox(value="Append")],
+            outputs=[captions, caption_display]
         )
 
 # Release all models when the app is closed
