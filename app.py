@@ -10,6 +10,9 @@ import numpy as np
 import history  # Import the history module
 from settings import format_json_to_html_table  # Import the format_json_to_html_table function
 import requests
+import tempfile
+import shutil
+import atexit
 
 # Load JSON files
 def load_json(file_path):
@@ -64,7 +67,7 @@ def release_model(model_name, ollama_url):
         return f"Error releasing model {model_name}: {e}"
 
 # Part 2: Chat Functionality
-def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model):
+def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiter_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model):
     global history_list  # Declare history_list as a global variable
     global current_session_history  # Declare current_session_history as a global variable
 
@@ -80,7 +83,7 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
     if release_model_on_change and current_model and current_model != model:
         release_model(current_model, settings.get("ollama_url", "http://localhost:11434/api/generate"))
 
-    limiter_settings = limiters.get(limiters_handling_option, {})
+    limiter_settings = limiters.get(limiter_handling_option, {})
     limiter_prompt_format = limiter_settings.get("limiter_prompt_format", "")
     limiter_token_slider = limiter_settings.get("limiter_token_slider", max_tokens)
 
@@ -101,7 +104,7 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
     confirmation_messages = []
 
     def process_image(image, file_path):
-        response = get_llm_response(role, prompt, model, [image], max_tokens, file_path, user_input, model_with_vision, max_tokens, single_image, limiters_handling_option, ollama_api_options)
+        response = get_llm_response(role, prompt, model, [image], max_tokens, file_path, user_input, model_with_vision, max_tokens, single_image, limiter_handling_option, ollama_api_options)
 
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         output_file = os.path.join(os.path.dirname(file_path), f"{base_name}.txt")
@@ -135,9 +138,9 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
     if not folder_path.strip() or not os.path.isdir(folder_path):
         if single_image is not None and model_info["vision"]:
             image = Image.fromarray(single_image.astype('uint8'))
-            response = get_llm_response(role, prompt, model, [image], max_tokens, None, user_input, model_with_vision, max_tokens, single_image, limiters_handling_option, ollama_api_options)
+            response = get_llm_response(role, prompt, model, [image], max_tokens, None, user_input, model_with_vision, max_tokens, single_image, limiter_handling_option, ollama_api_options)
         else:
-            response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option, ollama_api_options)
+            response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiter_handling_option, ollama_api_options)
 
         history_list.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
         current_session_history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
@@ -145,7 +148,7 @@ def chat(folder_path, role, user_input, model_with_vision, max_tokens, file_hand
         return response, "\n".join(current_session_history), model
 
     if not model_info["vision"]:
-        response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiters_handling_option, ollama_api_options)
+        response = get_llm_response(role, prompt, model, [], max_tokens, None, user_input, model_with_vision, max_tokens, None, limiter_handling_option, ollama_api_options)
         history_list.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
         current_session_history.append(f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
         history_list = history.add_to_history(history_list, f"User Input: {user_input}\nRole: {role}\nResponse: {response}\n")
@@ -204,26 +207,51 @@ current_session_history = []  # Initialize current session history as empty
 roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
 
 # Function to list image files and their captions
+temp_dir = None
+
+def cleanup_temp_dir():
+    global temp_dir
+    if temp_dir:
+        shutil.rmtree(temp_dir)
+
+atexit.register(cleanup_temp_dir)
+
 def list_images_and_captions(folder_path):
+    global temp_dir
     if not os.path.isdir(folder_path):
-        return [], []
+        return [], [], [], []
+
     image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif']
-    image_caption_pairs = []
     image_paths = []
     captions = []
+    image_gallery = []
+    caption_display = []
+
+    # Create a temporary directory
+    temp_dir = tempfile.mkdtemp()
+
     for filename in os.listdir(folder_path):
         name, ext = os.path.splitext(filename)
         if ext.lower() in image_extensions:
             image_path = os.path.join(folder_path, filename)
             caption_path = os.path.join(folder_path, name + '.txt')
+
+            # Copy the image to the temporary directory
+            temp_image_path = os.path.join(temp_dir, filename)
+            shutil.copy(image_path, temp_image_path)
+
             if os.path.exists(caption_path):
                 with open(caption_path, 'r', encoding='utf-8') as f:
                     caption = f.read()
             else:
                 caption = ''
-            image_paths.append(image_path)
+
+            image_paths.append(image_path)  # Keep original image path
             captions.append(caption)
-    return image_paths, captions
+            image_gallery.append(temp_image_path)  # Use copied image path
+            caption_display.append(caption)
+
+    return image_paths, captions, image_gallery, caption_display
 
 # Function to save all captions
 def save_all_captions(folder_path, captions):
@@ -257,7 +285,7 @@ with gr.Blocks(title="ArtAgents") as demo:
                     with gr.Column(scale=1):
                         single_image_display = gr.Image(label="Single Image Input")
                     with gr.Column(scale=1):
-                        limiters_handling_option = gr.Radio(["Off", "Flux", "XL", "SD3.5"], label="Limiters", value="Off")
+                        limiter_handling_option = gr.Radio(["Off", "Flux", "XL", "SD3.5"], label="Limiters", value="Off")
                         max_tokens = gr.Slider(50, settings.get("max_tokens_slider", 1500), step=10, value=settings.get("max_tokens_slider", 1500) // 2, label="Max Tokens")
                         using_default_agents = gr.Checkbox(label="Using Default Agents", value=settings.get("using_default_agents", False))
                         using_custom_agents = gr.Checkbox(label="Using Custom Agents", value=settings.get("using_custom_agents", False))
@@ -285,14 +313,13 @@ with gr.Blocks(title="ArtAgents") as demo:
         current_model_state = gr.State(value=None)  # Add a state to store the current model
 
         def on_limiter_change(limiter_handling_option, user_set_max_tokens, is_user_adjusted):
-            limiters = load_limiters('limiters.json')
             limiter_settings = limiters.get(limiter_handling_option, {})
             limiter_token_slider = limiter_settings.get("limiter_token_slider", user_set_max_tokens)
             return limiter_token_slider, False
 
-        limiters_handling_option.change(
+        limiter_handling_option.change(
             fn=on_limiter_change,
-            inputs=[limiters_handling_option, max_tokens, is_user_adjusted],
+            inputs=[limiter_handling_option, max_tokens, is_user_adjusted],
             outputs=[max_tokens, is_user_adjusted]
         )
 
@@ -328,14 +355,14 @@ with gr.Blocks(title="ArtAgents") as demo:
             outputs=[role]
         )
 
-        def chat_with_model(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model):
-            response, hist, model = chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model)
+        def chat_with_model(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiter_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model):
+            response, hist, model = chat(folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiter_handling_option, single_image, settings, use_ollama_api_options, release_model_on_change, current_model)
             current_session_history_display.value = hist  # Update history display
             return response, hist, model, model
 
         submit_button.click(
             fn=chat_with_model,
-            inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiters_handling_option, single_image_display, gr.State(settings), use_ollama_api_options, gr.State(settings.get("release_model_on_change", False)), current_model_state],
+            inputs=[folder_path, role, user_input, model_with_vision, max_tokens, file_handling_option, limiter_handling_option, single_image_display, gr.State(settings), use_ollama_api_options, gr.State(settings.get("release_model_on_change", False)), current_model_state],
             outputs=[llm_response, current_session_history_display, model_state, current_model_state]
         )
 
@@ -500,9 +527,8 @@ with gr.Blocks(title="ArtAgents") as demo:
             append_button = gr.Button("Append to All")
 
         with gr.Row():
-            image_caption_pairs = gr.State([])
-            captions = gr.State([])
             image_paths = gr.State([])
+            captions = gr.State([])
             image_gallery = gr.Gallery(label="Images and Captions", object_fit="contain", height="auto")
             caption_display = gr.Textbox(label="Captions", lines=15, value="")
 
