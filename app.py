@@ -206,7 +206,7 @@ current_session_history = []  # Initialize current session history as empty
 # Load default and custom agent roles
 roles = load_roles('agent_roles.json', 'custom_agent_roles.json', settings)
 
-# Function to list image files and their captions
+# Initialize temporary directory for copied images
 temp_dir = None
 
 def cleanup_temp_dir():
@@ -216,6 +216,7 @@ def cleanup_temp_dir():
 
 atexit.register(cleanup_temp_dir)
 
+# Function to list image files and their captions
 def list_images_and_captions(folder_path):
     global temp_dir
     if not os.path.isdir(folder_path):
@@ -269,6 +270,17 @@ def batch_edit_captions(captions, text, mode):
     elif mode == "Append":
         return [caption + text for caption in captions]
     return captions
+
+# Function to update caption display based on selected image
+def update_caption_display(selected_image, image_paths, captions, image_gallery):
+    if selected_image:
+        # Ensure selected_image is a list and get the first element
+        selected_image = selected_image[0] if isinstance(selected_image, list) else selected_image
+        # Find the index of the selected image in the image_gallery
+        selected_index = image_gallery.index(selected_image)
+        # Return the corresponding caption
+        return captions[selected_index]
+    return ""
 
 # Part 4: Gradio Interface Setup
 with gr.Blocks(title="ArtAgents") as demo:
@@ -529,8 +541,8 @@ with gr.Blocks(title="ArtAgents") as demo:
         with gr.Row():
             image_paths = gr.State([])
             captions = gr.State([])
-            image_gallery = gr.Gallery(label="Images and Captions", object_fit="contain", height="auto")
-            caption_display = gr.Textbox(label="Captions", lines=15, value="")
+            image_gallery = gr.Gallery(label="Images", object_fit="contain", height="auto")
+            caption_display = gr.Textbox(label="Caption", lines=5, value="")
 
         load_button.click(
             fn=list_images_and_captions,
@@ -554,6 +566,27 @@ with gr.Blocks(title="ArtAgents") as demo:
             fn=batch_edit_captions,
             inputs=[captions, batch_edit_text, gr.Textbox(value="Append")],
             outputs=[captions, caption_display]
+        )
+
+        # Update caption display when an image is selected in the gallery
+        image_gallery.select(
+            fn=update_caption_display,
+            inputs=[image_gallery, image_paths, captions, image_gallery],
+            outputs=[caption_display]
+        )
+
+        # Update captions state when caption_display is edited
+        caption_display.change(
+            fn=lambda caption, idx, caps: caps[:idx] + [caption] + caps[idx+1:] if idx is not None else caps,
+            inputs=[caption_display, gr.State(None), captions],
+            outputs=[captions]
+        )
+
+        # Update the index state when an image is selected in the gallery
+        image_gallery.select(
+            fn=lambda selected_image, image_paths: image_paths.index(selected_image[0]) if isinstance(selected_image, list) and selected_image[0] in image_paths else None,
+            inputs=[image_gallery, image_paths],
+            outputs=[gr.State(None)]
         )
 
 # Release all models when the app is closed
