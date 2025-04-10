@@ -8,7 +8,7 @@
         "vision": false
     },
     {
-        "name": "impactframes/ifai_sd_prompt_mkr_q4km:latest",
+        "name": "impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest",
         "vision": false,
         "notes": "Specialized prompt maker model"
     }
