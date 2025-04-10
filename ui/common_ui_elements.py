@@ -1,8 +1,13 @@
 # ArtAgent/ui/common_ui_elements.py
 import gradio as gr
 
-# Define common elements or functions if needed, e.g., standard footer
 def create_footer():
-    return gr.Markdown("--- \n ArtAgents | sandner.art | [Creative AI/ML Research](https://github.com/sandner-art)")
-
-# Could add functions for standard input groups etc. later
+    """Creates a standard footer markdown element."""
+    # Using HTML for slightly better control over spacing and links if needed
+    return gr.HTML("""
+        <hr>
+        <p style='text-align: center; font-size: 0.9em; color: grey;'>
+            ArtAgents | <a href='https://sandner.art/' target='_blank'>sandner.art</a> |
+            <a href='https://github.com/sandner-art' target='_blank'>Creative AI/ML Research</a>
+        </p>
+    """)
