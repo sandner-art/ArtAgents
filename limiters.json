@@ -1,14 +1,14 @@
 {
     "Flux": {
         "limiter_token_slider": 650,
-        "limiter_prompt_format": "Use natural language, do not repeat the same words and duplicate adjectives, create a prompt for generative AI visual model Flux. Avoid comments, opinions, adlib recommendations, special interpunction or formatting in your reply.\n"
+        "limiter_prompt_format": "Use natural language. Be very descriptive, focusing on visual details. Do not repeat words or adjectives excessively. Target prompt for the Flux image generation model. Avoid commentary, opinions, recommendations, special punctuation, or formatting."
     },
     "XL": {
         "limiter_token_slider": 225,
-        "limiter_prompt_format": "Use descriptive tags for descriptions and subjects, use commas and and sigle dot to structure your output, use shorter descriptions of a scene, adjectives, descriptors, you may use dashes for combined words, the reply shall used for generative art stable diffusion and SDXL. Do not use asterisks or special interpuction symbols. Avoid comments, opinions, adlib recommendations, symbols or formatting in your reply.\n"
+        "limiter_prompt_format": "Use descriptive tags for subjects and descriptions, separated by commas. Use shorter descriptions, adjectives, and descriptors. Dashes (-) may be used for combined concepts. Target prompt for SDXL models. Avoid special symbols, asterisks, commentary, opinions, or formatting."
     },
-    "SD3.5": {
+    "SD3": {
         "limiter_token_slider": 350,
-        "limiter_prompt_format": "Use natural language, be concise, very descriptive and do not repeat yourself, capture the scene concisely and meticulously for generative AI stable diffusion model SD3.5. Avoid comments, opinions, adlib recommendations, special interpuction symbols or formatting in your reply.\n"
+        "limiter_prompt_format": "Use natural language. Be concise yet highly descriptive. Do not repeat concepts. Capture the scene meticulously for the SD3 generation model. Avoid commentary, opinions, recommendations, special symbols, or formatting."
     }
 }

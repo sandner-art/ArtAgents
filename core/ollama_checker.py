@@ -1,7 +1,7 @@
-# ollama_checker.py
+# ArtAgent/core/ollama_checker.py
 import requests
 from typing import Optional
-from urllib.parse import urlparse # Use urlparse for more robust parsing
+from urllib.parse import urlparse
 
 class OllamaStatusChecker:
     """
@@ -40,8 +40,7 @@ class OllamaStatusChecker:
     def check(self) -> bool:
         """Performs the connection check to the derived Ollama base URL."""
         self._checked = True
-        # Check against the derived self.base_url
-        if not self.base_url: # Should not happen if _derive_base_url has fallback
+        if not self.base_url:
              self.available = False
              self.status_message = "Error: Base URL could not be determined."
              return False
@@ -78,7 +77,6 @@ class OllamaStatusChecker:
         if not self._checked:
             self.status_message = "Check not performed yet."
 
-        # Console message formatting (uses self.base_url derived internally)
         return (
             f"\n{'='*60}\n"
             f"🛑 INFO: Ollama Connection Check Failed at Startup! 🛑\n"
@@ -86,8 +84,8 @@ class OllamaStatusChecker:
             f"ArtAgents requires the Ollama service to be running to process requests.\n\n"
             f"[Details]\n"
             f"  Reason: {self.status_message}\n"
-            f"  Derived Base URL Checked: {self.base_url}\n" # Show derived URL
-            f"  Configured API URL: {self.full_api_url}\n\n" # Show original config URL
+            f"  Derived Base URL Checked: {self.base_url}\n"
+            f"  Configured API URL: {self.full_api_url}\n\n"
             f"[Action Suggested]\n"
             f"  If Ollama is not running, please start it using:\n"
             f"    1. The Ollama Desktop application, OR\n"

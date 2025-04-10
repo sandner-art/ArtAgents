@@ -1,3 +1,5 @@
+# ArtAgent/requirements.txt
 gradio==3.38.0
-Pillow==9.5.0  # For image processing
-requests==2.31.0  # For making HTTP requests
+requests==2.31.0
+Pillow==9.5.0
+numpy
