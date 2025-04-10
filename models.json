@@ -11,5 +11,10 @@
         "name": "impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest",
         "vision": false,
         "notes": "Specialized prompt maker model"
+    },
+    {
+        "name": "tinyllama:latest",
+        "vision": false,
+        "notes": "Small model for testing"
     }
 ]
