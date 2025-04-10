@@ -57,6 +57,7 @@ OS_LISTDIR_PATH = 'core.app_logic.os.listdir'
 OS_PATH_EXISTS_PATH = 'core.app_logic.os.path.exists'
 OS_PATH_SPLITEXT_PATH = 'core.app_logic.os.path.splitext'
 OS_PATH_JOIN_PATH = 'core.app_logic.os.path.join' # Added for mocking
+OS_PATH_BASENAME_PATH = 'core.app_logic.os.path.basename' # Added for mocking
 OS_PATH_ISFILE_PATH = 'core.app_logic.os.path.isfile' # Added for folder processing fix
 GET_ABSOLUTE_PATH = 'core.app_logic.get_absolute_path' # Used by save_settings
 BUILTINS_OPEN_PATH = 'core.app_logic.open'
@@ -272,7 +273,7 @@ def test_chat_logic_single_image(mock_get_actual_name, mock_load_roles, mock_get
     )
 
     assert response == "LLM Image Response"
-    assert model_state == "vision-model" # Assert the base name # FIXED PREVIOUSLY
+    assert model_state == "vision-model" # Assert the base name
     assert "Image: [Single Upload]" in session_hist_txt # Check history entry
     assert len(new_session_list) == 2
 
@@ -291,48 +292,48 @@ def test_chat_logic_single_image(mock_get_actual_name, mock_load_roles, mock_get
 @patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
-@patch(OS_PATH_ISDIR_PATH, return_value=True) # Mock folder exists
-@patch(OS_LISTDIR_PATH, return_value=["img1.png", "img2.jpg", "other.txt"]) # Mock files in folder
-@patch(OS_PATH_EXISTS_PATH, return_value=False) # Mock .txt files don't exist initially
-@patch(OS_PATH_SPLITEXT_PATH, side_effect=lambda p: os.path.splitext(os.path.basename(p))) # Mock splitext
-@patch(OS_PATH_JOIN_PATH, side_effect=os.path.join) # Mock join # ADDED
-@patch(OS_PATH_ISFILE_PATH, return_value=True) # Mock isfile # ADDED
-@patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image)) # Mock Image.open
-@patch(BUILTINS_OPEN_PATH, new_callable=mock_open) # Mock writing .txt files
+@patch(OS_PATH_ISDIR_PATH, return_value=True)
+@patch(OS_LISTDIR_PATH, return_value=["img1.png", "img2.jpg", "other.txt"])
+@patch(OS_PATH_EXISTS_PATH, return_value=False)
+@patch(OS_PATH_SPLITEXT_PATH, side_effect=lambda p: os.path.splitext(os.path.basename(p)))
+@patch(OS_PATH_BASENAME_PATH, side_effect=os.path.basename) # ADDED BASENAME MOCK
+@patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # Simple join mock # FIXED
+@patch(OS_PATH_ISFILE_PATH, return_value=True) # Mock isfile
+@patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
+@patch(BUILTINS_OPEN_PATH, new_callable=mock_open)
 def test_chat_logic_folder_processing_skip(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Skip' file handling."""
     mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.side_effect = ["LLM Resp Img1", "LLM Resp Img2"] # One response per image
+    mock_get_llm.side_effect = ["LLM Resp Img1", "LLM Resp Img2"]
     mock_pil_image_instance = mock_pil_open.return_value
 
     response, session_hist_txt, model_state, new_session_list = app_logic.chat_logic(
         ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens,
-        "Skip", ui_limiter, None, # Skip file handling, no single image
-        ui_use_ollama_options, False, # No release model
+        "Skip", ui_limiter, None,
+        ui_use_ollama_options, False,
         mock_settings, mock_models_data, mock_limiters_data,
         None, mock_file_agents_dict, mock_history_list, mock_session_history
     )
 
-    assert response.startswith("Folder processing complete (2 files):") # Check summary msg
+    assert response.startswith("Folder processing complete (2 files):")
     assert "img1.png: Skipped -> img1.txt" in response
     assert "img2.jpg: Skipped -> img2.txt" in response
     assert model_state == "vision-model"
-    assert len(new_session_list) == 3 # Original + 2 image entries
+    assert len(new_session_list) == 3
 
     mock_isdir.assert_called_once_with(ui_folder_path)
     mock_listdir.assert_called_once_with(ui_folder_path)
-    assert mock_isfile.call_count == 2 # Check isfile called for each image
-    assert mock_pil_open.call_count == 2 # Called for png and jpg
+    assert mock_isfile.call_count == 2
+    assert mock_pil_open.call_count == 2
     assert mock_get_llm.call_count == 2
-    # Check args for second LLM call (img2.jpg)
     call_args_2, call_kwargs_2 = mock_get_llm.call_args_list[1]
     assert call_kwargs_2['model'] == "vision-model"
     assert call_kwargs_2['images'][0] == mock_pil_image_instance
     assert "Image Context: Analyzing 'img2.jpg'" in call_kwargs_2['prompt']
-    mock_builtin_open.assert_not_called() # open shouldn't be called for Skip
-    assert mock_add_history.call_count == 2 # Called once per image
+    mock_builtin_open.assert_not_called()
+    assert mock_add_history.call_count == 2
     # Removed assert False
 
 
@@ -396,35 +397,37 @@ def test_chat_logic_limiter(
 @patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
-@patch(OS_PATH_ISDIR_PATH, return_value=True) # Mock folder exists
+@patch(OS_PATH_ISDIR_PATH, return_value=True)
 @patch(OS_LISTDIR_PATH, return_value=["img1.png"])
-@patch(OS_PATH_EXISTS_PATH, side_effect=[False, True]) # 1st check (write): False, 2nd (append): True
+@patch(OS_PATH_EXISTS_PATH, side_effect=[False, True])
 @patch(OS_PATH_SPLITEXT_PATH, side_effect=lambda p: os.path.splitext(os.path.basename(p)))
-@patch(OS_PATH_JOIN_PATH, side_effect=os.path.join) # Mock join # ADDED
-@patch(OS_PATH_ISFILE_PATH, return_value=True) # Mock isfile # ADDED
+@patch(OS_PATH_BASENAME_PATH, side_effect=os.path.basename) # ADDED
+@patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
+@patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
-@patch(BUILTINS_OPEN_PATH, new_callable=mock_open) # Mock writing .txt files
+@patch(BUILTINS_OPEN_PATH, new_callable=mock_open)
 def test_chat_logic_folder_processing_overwrite(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Overwrite' file handling."""
     mock_load_roles.return_value = mock_roles_data
     mock_get_llm.return_value = "LLM Overwrite Resp"
-    expected_txt_path = os.path.join(ui_folder_path, "img1.txt")
+    # Use the mocked join to determine expected path
+    expected_txt_path = os.sep.join([ui_folder_path, "img1.txt"])
 
     # Scenario 1: File doesn't exist
-    mock_exists.side_effect = [False] # Reset side effect for this run
+    mock_exists.side_effect = [False]
     response1, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Overwrite", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
     assert "img1.png: Written -> img1.txt" in response1 # FIXED
     mock_builtin_open.assert_called_with(expected_txt_path, 'w', encoding='utf-8')
     mock_builtin_open().write.assert_called_with("LLM Overwrite Resp")
-    mock_builtin_open.reset_mock() # Reset for next scenario
-    mock_get_llm.reset_mock() # Reset LLM mock as well
-    mock_exists.reset_mock() # Reset exists mock
+    mock_builtin_open.reset_mock()
+    mock_get_llm.reset_mock()
+    mock_exists.reset_mock()
 
     # Scenario 2: File exists
-    mock_exists.side_effect = [True] # Reset side effect for this run
-    mock_get_llm.return_value = "LLM Overwrite Resp AGAIN" # Change response slightly
+    mock_exists.side_effect = [True]
+    mock_get_llm.return_value = "LLM Overwrite Resp AGAIN"
     response2, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Overwrite", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
     assert "img1.png: Overwritten -> img1.txt" in response2 # FIXED
     mock_builtin_open.assert_called_with(expected_txt_path, 'w', encoding='utf-8')
@@ -438,19 +441,20 @@ def test_chat_logic_folder_processing_overwrite(
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
 @patch(OS_PATH_ISDIR_PATH, return_value=True)
 @patch(OS_LISTDIR_PATH, return_value=["img1.png"])
-@patch(OS_PATH_EXISTS_PATH, return_value=True) # File always exists for append/prepend tests
+@patch(OS_PATH_EXISTS_PATH, return_value=True)
 @patch(OS_PATH_SPLITEXT_PATH, side_effect=lambda p: os.path.splitext(os.path.basename(p)))
-@patch(OS_PATH_JOIN_PATH, side_effect=os.path.join) # Mock join # ADDED
-@patch(OS_PATH_ISFILE_PATH, return_value=True) # Mock isfile # ADDED
+@patch(OS_PATH_BASENAME_PATH, side_effect=os.path.basename) # ADDED
+@patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
+@patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
 @patch(BUILTINS_OPEN_PATH, new_callable=mock_open)
 def test_chat_logic_folder_processing_append(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Append' file handling."""
     mock_load_roles.return_value = mock_roles_data
     mock_get_llm.return_value = "LLM Append Resp"
-    expected_txt_path = os.path.join(ui_folder_path, "img1.txt")
+    expected_txt_path = os.sep.join([ui_folder_path, "img1.txt"])
 
     response, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Append", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
 
@@ -466,19 +470,20 @@ def test_chat_logic_folder_processing_append(
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
 @patch(OS_PATH_ISDIR_PATH, return_value=True)
 @patch(OS_LISTDIR_PATH, return_value=["img1.png"])
-@patch(OS_PATH_EXISTS_PATH, return_value=True) # File always exists for append/prepend tests
+@patch(OS_PATH_EXISTS_PATH, return_value=True)
 @patch(OS_PATH_SPLITEXT_PATH, side_effect=lambda p: os.path.splitext(os.path.basename(p)))
-@patch(OS_PATH_JOIN_PATH, side_effect=os.path.join) # Mock join # ADDED
-@patch(OS_PATH_ISFILE_PATH, return_value=True) # Mock isfile # ADDED
+@patch(OS_PATH_BASENAME_PATH, side_effect=os.path.basename) # ADDED
+@patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
+@patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
 @patch(BUILTINS_OPEN_PATH, new_callable=mock_open, read_data="Original Content.") # Mock read for prepend
 def test_chat_logic_folder_processing_prepend(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Prepend' file handling."""
     mock_load_roles.return_value = mock_roles_data
     mock_get_llm.return_value = "LLM Prepend Resp"
-    expected_txt_path = os.path.join(ui_folder_path, "img1.txt")
+    expected_txt_path = os.sep.join([ui_folder_path, "img1.txt"])
 
     response, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Prepend", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
 
@@ -556,11 +561,12 @@ def test_chat_logic_error_single_image_processing(mock_pil_fromarray):
 @patch(OS_PATH_ISDIR_PATH, return_value=True)
 @patch(OS_LISTDIR_PATH, return_value=["bad_image.png"])
 @patch(OS_PATH_SPLITEXT_PATH, side_effect=lambda p: os.path.splitext(os.path.basename(p)))
-@patch(OS_PATH_JOIN_PATH, side_effect=os.path.join) # ADDED
+@patch(OS_PATH_BASENAME_PATH, side_effect=os.path.basename) # ADDED
+@patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
 @patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, side_effect=IOError("Cannot open this image")) # Mock Image.open error
 def test_chat_logic_error_folder_image_open(
-    mock_pil_open, mock_isfile, mock_join, mock_splitext, mock_listdir, mock_isdir, mock_add_history): # ADDED mocks
+    mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_listdir, mock_isdir, mock_add_history): # ADDED mocks
     """Test chat_logic handling errors during Image.open in folder processing."""
     # Need to mock other dependencies even if not directly used in the error path
     with patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data), \
@@ -741,6 +747,7 @@ def test_remove_step_from_editor_invalid_index():
     new_state_2, steps_update_2 = app_logic.remove_step_from_editor(2, editor_state_in)
     assert new_state_2 == editor_state_in # Unchanged
     assert isinstance(steps_update_2, dict) # Check it's a dict (Gradio update) # FIXED
+    # Removed assert False
 
 @patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data) # Mock role loading needed for dropdown update logic
 @patch(SAVE_TEAMS_PATH, return_value=True) # Mock successful save
@@ -769,11 +776,11 @@ def test_save_team_from_editor_success_new(mock_save, mock_load_roles):
     assert teams_state_out[new_name]["assembly_strategy"] == new_strat
     mock_save.assert_called_once_with(teams_state_out) # Check save call
     # Check Gradio updates (check specific relevant keys)
-    assert isinstance(editor_dd_update, dict) # FIXED
+    assert isinstance(editor_dd_update, dict) # Check it's a dict (Gradio update)
     assert editor_dd_update.get('choices') is not None
     assert new_name in editor_dd_update['choices']
     assert editor_dd_update.get('value') == new_name
-    assert isinstance(chat_dd_update, dict) # FIXED
+    assert isinstance(chat_dd_update, dict) # Check it's a dict (Gradio update)
     assert chat_dd_update.get('choices') is not None
     assert f"[Team] {new_name}" in chat_dd_update['choices']
     assert chat_dd_update.get('value') == f"[Team] {new_name}"
@@ -827,18 +834,18 @@ def test_delete_team_logic_success(mock_save, mock_load_roles):
         current_settings_state, current_file_agents_state
     )
     teams_state_out, editor_dd_update, chat_dd_update, status_msg = outputs[0:4]
-    clear_outputs = outputs[4:]
+    clear_outputs = outputs[4:] # This is a list of 5 elements
 
     assert f"Team '{team_to_delete}' deleted successfully" in status_msg
     assert team_to_delete not in teams_state_out # Team removed from state
     assert "TeamB" in teams_state_out # Other teams remain
     mock_save.assert_called_once_with(teams_state_out) # Check save call with updated data
     # Check Gradio updates (check specific relevant keys)
-    assert isinstance(editor_dd_update, dict) # FIXED
+    assert isinstance(editor_dd_update, dict) # Check it's a dict (Gradio update)
     assert editor_dd_update.get("choices") is not None
     assert team_to_delete not in editor_dd_update["choices"]
     assert editor_dd_update.get("value") is None # Value cleared
-    assert isinstance(chat_dd_update, dict) # FIXED
+    assert isinstance(chat_dd_update, dict) # Check it's a dict (Gradio update)
     assert chat_dd_update.get("choices") is not None
     assert f"[Team] {team_to_delete}" not in chat_dd_update["choices"]
     assert chat_dd_update.get("value") == "(Direct Agent Call)" # Value reset
@@ -846,11 +853,12 @@ def test_delete_team_logic_success(mock_save, mock_load_roles):
     name_clr, desc_clr, steps_clr, strat_clr, state_clr = app_logic.clear_team_editor()
     # Compare elements individually # FIXED
     assert len(clear_outputs) == 5
-    assert clear_outputs[0] == name_clr
-    assert clear_outputs[1] == desc_clr
-    assert clear_outputs[2] == steps_clr
-    assert clear_outputs[3] == strat_clr
-    assert clear_outputs[4] == state_clr
+    assert clear_outputs[0] == name_clr     # ""
+    assert clear_outputs[1] == desc_clr     # ""
+    assert clear_outputs[2] == steps_clr    # []
+    assert clear_outputs[3] == strat_clr    # "concatenate"
+    assert clear_outputs[4] == state_clr    # mock_empty_editor_state
+
 
 def test_delete_team_logic_not_found():
     """Test deleting a team that doesn't exist."""
@@ -1041,7 +1049,7 @@ def test_handle_agent_file_upload_success(mock_file):
     assert "AgentFromFile" in loaded_dict
     assert loaded_dict["AgentFromFile"]["description"] == "File Agent Desc"
     # Check if it returns a Gradio update object (dict)
-    assert isinstance(update_obj, dict) # FIXED
+    assert isinstance(update_obj, dict) # Check it's a dict (Gradio update)
 
 
 def test_handle_agent_file_upload_none():
@@ -1049,7 +1057,7 @@ def test_handle_agent_file_upload_none():
     loaded_dict, filename, update_obj = app_logic.handle_agent_file_upload(None)
     assert loaded_dict == {}
     assert filename is None
-    assert isinstance(update_obj, dict) # FIXED
+    assert isinstance(update_obj, dict) # Check it's a dict (Gradio update)
 
 @patch(BUILTINS_OPEN_PATH, new_callable=mock_open, read_data='invalid json')
 def test_handle_agent_file_upload_invalid_json(mock_file):
@@ -1059,7 +1067,7 @@ def test_handle_agent_file_upload_invalid_json(mock_file):
     loaded_dict, filename, update_obj = app_logic.handle_agent_file_upload(mock_uploaded_file)
     assert loaded_dict == {}
     assert filename is None
-    assert isinstance(update_obj, dict) # FIXED
+    assert isinstance(update_obj, dict) # Check it's a dict (Gradio update)
 
 @patch(BUILTINS_OPEN_PATH, new_callable=mock_open, read_data='{"BadAgent": "just a string"}')
 def test_handle_agent_file_upload_invalid_agent_format(mock_file):
@@ -1069,7 +1077,7 @@ def test_handle_agent_file_upload_invalid_agent_format(mock_file):
     loaded_dict, filename, update_obj = app_logic.handle_agent_file_upload(mock_uploaded_file)
     assert loaded_dict == {} # No valid agents found
     assert filename is None # Returns None because no *valid* agents loaded
-    assert isinstance(update_obj, dict) # FIXED
+    assert isinstance(update_obj, dict) # Check it's a dict (Gradio update)
 
 # --- Tests for History Callbacks ---
 
