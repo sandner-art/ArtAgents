@@ -341,6 +341,7 @@ def comment_logic(
 
     if not comment or not model_state_value:
         print("Comment ignored: No comment text or model state.")
+        # Return unchanged values, matching output signature (3 values)
         return llm_response_text, "\n---\n".join(current_session_history), current_session_history
 
     # Use settings PASSED IN
@@ -370,6 +371,7 @@ def comment_logic(
 def update_max_tokens_on_limiter_change(limiter_choice, current_max_tokens_value):
     """Updates the max token slider value based on limiter selection."""
     # Use load_json directly here as limiters_data_state might not be passed
+    # Consider passing limiters_data_state if strict state passing is desired
     current_limiters_data = load_json(LIMITERS_FILE, is_relative=True)
     if limiter_choice == "Off": return gr.update()
 
@@ -393,15 +395,14 @@ def clear_session_history_callback(session_history_list_state):
     return "", [] # Match outputs = [display, state]
 
 
-# This callback's logic is now primarily handled by the WRAPPER in app.py
-# Keep this stub here in case it's needed, but ensure app.py calls the wrapper.
+# This callback's logic is now handled by the WRAPPER in app.py
+# It needs access to various states (settings, file_agents, teams)
+# Keep the definition here for reference, but app.py calls the wrapper.
 def update_role_dropdown_callback(use_default, use_custom, file_agents_dict, teams_data_state, current_settings_dict):
     """Core logic to calculate updated choices for agent/team dropdown."""
-    # NOTE: app.py uses refresh_agent_team_dropdown_wrapper which contains this logic
     print("Core logic: Calculating role/team dropdown choices...")
-    # Use settings passed in
-    # current_settings_dict["using_default_agents"] = use_default # Flags are already part of the dict
-    # current_settings_dict["using_custom_agents"] = use_custom
+    current_settings_dict["using_default_agents"] = use_default
+    current_settings_dict["using_custom_agents"] = use_custom
     combined_roles = load_all_roles(current_settings_dict, file_agents=file_agents_dict)
     file_agent_keys = list(file_agents_dict.keys()) if file_agents_dict else []
     role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
@@ -409,7 +410,6 @@ def update_role_dropdown_callback(use_default, use_custom, file_agents_dict, tea
     all_choices = ["(Direct Agent Call)"] + team_display_choices + role_display_choices
     new_value = all_choices[0] if all_choices else None
     print(f" Core Logic: Role/Team choices calculated: {len(all_choices)} total")
-    # This function itself just returns the update object for Gradio
     return gr.Dropdown.update(choices=all_choices, value=new_value)
 
 
@@ -417,7 +417,9 @@ def handle_agent_file_upload(uploaded_file):
     """Processes uploaded agent JSON file. Returns dict, filename, update obj for dropdown."""
     if uploaded_file is None:
         print("Agent file upload cleared.")
-        return {}, None, gr.Dropdown.update() # Trigger refresh
+        # Needs to return 3 values matching outputs list in app.py upload handler
+        # The third value signals Gradio to run the .then() chain
+        return {}, None, gr.Dropdown.update()
 
     try:
         file_path = uploaded_file.name; file_basename = os.path.basename(file_path)
@@ -433,7 +435,7 @@ def handle_agent_file_upload(uploaded_file):
             else: print(f"Warning: Agent '{key}' in file '{file_basename}' skipped (invalid format).")
         if not valid_agents: raise ValueError("No valid agent definitions found.")
         print(f"Successfully loaded {len(valid_agents)} agent(s) from {file_basename}.")
-        # Return loaded dict, base filename, and trigger dropdown update
+        # Return loaded dict, base filename, and trigger dropdown update via .then()
         return valid_agents, file_basename, gr.Dropdown.update()
     except (json.JSONDecodeError, ValueError) as e: error_msg = f"Invalid Agent File: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
     except Exception as e: error_msg = f"Error processing agent file: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
@@ -510,10 +512,11 @@ def save_settings_callback(
             for key, value in zip(ordered_keys, api_option_values):
                 original_value = initial_options_for_types.get(key)
                 try: # Attempt type conversion
+                    # Check explicit types first for safer conversion
                     if isinstance(original_value, bool): api_options_updates[key] = bool(value)
                     elif isinstance(original_value, int): api_options_updates[key] = int(value)
                     elif isinstance(original_value, float): api_options_updates[key] = float(value)
-                    else: api_options_updates[key] = value # Save as received type
+                    else: api_options_updates[key] = value # Save as received type otherwise
                 except (ValueError, TypeError) as e:
                     print(f"Warning: Could not convert saved value '{value}' for option '{key}' based on original type {type(original_value)}. Saving as received. Error: {e}")
                     api_options_updates[key] = value
@@ -546,7 +549,8 @@ def load_team_for_editing(team_name_to_load, all_teams_data_state):
     team_data = all_teams_data_state.get(team_name_to_load)
     if not team_data or not isinstance(team_data, dict):
         print(f"Error: Team data not found or invalid for '{team_name_to_load}'.")
-        error_state = {"name": team_name_to_load, "description": "Error loading.", "steps": [], "assembly_strategy": "concatenate"}
+        error_state = {"name": team_name_to_load, "description": "Error: Team data not found.", "steps": [], "assembly_strategy": "concatenate"}
+        # Match the 5 return values expected by the UI binding
         return team_name_to_load, "Error: Team data not found.", [], "concatenate", error_state
 
     # Ensure steps is always a list, even if missing/null in JSON
@@ -579,7 +583,8 @@ def add_step_to_editor(agent_role_display_name_to_add, current_editor_state):
     """Adds the selected agent as a new step to the current editor state."""
     if not agent_role_display_name_to_add:
         print("Add Step: No agent selected."); gr.Warning("Please select an agent role to add.")
-        return current_editor_state, gr.update() # No change
+        # Return state and no-update for JSON display
+        return current_editor_state, gr.update()
 
     # Ensure state is a dictionary, default if not
     editor_state = current_editor_state.copy() if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
@@ -609,7 +614,8 @@ def remove_step_from_editor(step_index_to_remove, current_editor_state):
     except (ValueError, TypeError, IndexError):
         msg = f"Invalid step number '{step_index_to_remove}' (must be 1 to {len(steps)})."
         print(f"Remove Step: {msg}"); gr.Warning(msg)
-        return editor_state, gr.update() # No change
+        # Return state and no-update for JSON display
+        return editor_state, gr.update()
 
     removed_step = steps.pop(index_0_based);
     editor_state["steps"] = steps # Update steps in the state copy
@@ -623,16 +629,17 @@ def save_team_from_editor(
     team_name_in, description_in, assembly_strategy_in,
     # State values
     current_editor_state, # Contains the steps list
-    all_teams_data_state, # Contains all teams
-    # Need settings state for reloading roles for dropdown update
-    current_settings_state,
-    # Need file agents state for reloading roles for dropdown update
-    file_agents_dict_state
+    all_teams_data_state,
+    current_settings_state, # Needed for reloading roles for dropdown update
+    file_agents_dict_state  # Needed for reloading roles for dropdown update
     ):
     """Saves the team currently defined in the editor fields."""
     print("Attempting to save team...")
     team_name = team_name_in.strip()
-    if not team_name: msg = "Save failed: Team Name cannot be empty."; print(msg); gr.Error(msg); return all_teams_data_state, gr.update(), gr.update(), msg
+    # Define default outputs
+    default_outputs = [all_teams_data_state, gr.update(), gr.update(), "Save failed."]
+
+    if not team_name: msg = "Team Name cannot be empty."; print(msg); gr.Error(msg); return default_outputs[0:3] + [msg]
 
     steps = current_editor_state.get("steps", [])
     if not steps: msg = f"Save Warning: Team '{team_name}' has no steps."; print(msg); gr.Warning(msg) # Allow save
@@ -644,40 +651,36 @@ def save_team_from_editor(
     if save_teams_to_file(all_teams_data):
         msg = f"Team '{team_name}' saved successfully."
         print(msg)
-        # --- Reload necessary data for dropdown updates ---
-        # Settings are needed for load_all_roles flags
+        # Reload roles using current settings and file agents state
         combined_roles = load_all_roles(current_settings_state, file_agents=file_agents_dict_state)
         file_agent_keys = list(file_agents_dict_state.keys()) if file_agents_dict_state else []
         role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
-        new_team_choices = sorted(list(all_teams_data.keys())) # Use updated teams data
+        new_team_choices = sorted(list(all_teams_data.keys()))
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
         # Outputs: teams_data_state, editor_team_dropdown, chat_role_dropdown, status_textbox
         return all_teams_data, gr.Dropdown.update(choices=new_team_choices, value=team_name), gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"), msg
     else:
         msg = f"Error: Failed to save team data."; print(msg); gr.Error(msg)
-        return all_teams_data_state, gr.update(), gr.update(), msg
+        return default_outputs[0:3] + [msg] # Return original state, update status
 
 
 def delete_team_logic(
     team_name_to_delete,
     all_teams_data_state,
-    # Need settings state for reloading roles for dropdown update
-    current_settings_state,
-    # Need file agents state for reloading roles for dropdown update
-    file_agents_dict_state
+    current_settings_state, # Needed for reloading roles for dropdown update
+    file_agents_dict_state  # Needed for reloading roles for dropdown update
     ):
     """Deletes the selected team."""
     print(f"Attempting to delete team: '{team_name_to_delete}'")
-    # Define default outputs matching the expected 9 return values for app.py wiring
-    # Return signature: all_teams_data, editor_dd_update, chat_dd_update, status_msg, name_tb, desc_tb, steps_json, strategy_radio, editor_state
-    clear_name, clear_desc, clear_steps, clear_strat, clear_state = clear_team_editor() # Get clear values
-    no_change_outputs = [all_teams_data_state, gr.update(), gr.update(), "Delete failed: No team selected.", clear_name, clear_desc, clear_steps, clear_strat, clear_state]
+    # Define default clear values and no-change outputs
+    clear_name, clear_desc, clear_steps, clear_strat, clear_state = clear_team_editor()
+    no_change_outputs = [all_teams_data_state, gr.update(), gr.update(), "Delete failed.", clear_name, clear_desc, clear_steps, clear_strat, clear_state]
 
     if not team_name_to_delete: msg = "No team selected."; print(msg); gr.Warning(msg); return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
     all_teams_data = all_teams_data_state.copy() if all_teams_data_state else {}
     if team_name_to_delete not in all_teams_data: msg = f"Team '{team_name_to_delete}' not found."; print(msg); gr.Warning(msg); return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
 
-    del all_teams_data[team_name_to_delete] # Delete the team
+    del all_teams_data[team_name_to_delete]
 
     if save_teams_to_file(all_teams_data):
         msg = f"Team '{team_name_to_delete}' deleted successfully."
@@ -686,9 +689,8 @@ def delete_team_logic(
         combined_roles = load_all_roles(current_settings_state, file_agents=file_agents_dict_state)
         file_agent_keys = list(file_agents_dict_state.keys()) if file_agents_dict_state else []
         role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
-        new_team_choices = sorted(list(all_teams_data.keys())) # Use updated teams data
+        new_team_choices = sorted(list(all_teams_data.keys()))
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
-
         # Return updates: teams_state, editor_dd, chat_dd, status_msg, + clear outputs
         return all_teams_data, gr.Dropdown.update(choices=new_team_choices, value=None), gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"), msg, clear_name, clear_desc, clear_steps, clear_strat, clear_state
     else:
