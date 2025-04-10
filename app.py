@@ -20,7 +20,7 @@ from core.app_logic import (
     comment_logic,
     update_max_tokens_on_limiter_change,
     clear_session_history_callback,
-    # update_role_dropdown_callback, # Logic now in refresh_agent_team_dropdown_wrapper
+    # update_role_dropdown_callback, # Logic now in refresh_agent_team_dropdowns_wrapper
     handle_agent_file_upload,
     load_profile_options_callback,
     save_settings_callback,
@@ -48,7 +48,10 @@ from core.captioning_logic import ( # Import captioning logic functions
     load_images_and_captions,
     update_caption_display,
     save_caption,
-    batch_edit_captions
+    batch_edit_captions,
+    # --- NEW: Add placeholder imports for generation logic ---
+    generate_captions_for_selected, # Will be implemented later
+    generate_captions_for_all       # Will be implemented later
 )
 # --- Constants ---
 SETTINGS_FILE = 'settings.json'
@@ -101,7 +104,7 @@ initial_roles_data = load_all_roles(settings) # Pass settings to respect flags
 initial_role_names = list(initial_roles_data.keys())
 initial_role_display_names = sorted([get_role_display_name(name) for name in initial_role_names])
 
-# Create combined list for initial agent/team dropdown
+# Create combined list for initial agent/team dropdowns (Used by Chat AND Captions tab) # MODIFIED
 initial_agent_team_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in team_names]) + initial_role_display_names
 # Generate initial list of ALL available agents for editor's dropdown
 all_available_agents_initial = load_all_roles(settings, file_agents={}) # Load all non-file agents initially
@@ -149,7 +152,6 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         initial_team_names=sorted(team_names),
         initial_available_agent_names=all_available_agent_display_names_initial # Pass initial list
     )
-    # Create the new Sweep tab
     sweep_comps = create_sweep_tab(
         initial_team_names=sorted(team_names), # Use loaded team names
         initial_model_names=all_initial_worker_model_choices # Use filtered model names
@@ -159,15 +161,17 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          load_json(CUSTOM_ROLES_FILE, is_relative=True)
     )
     history_comps = create_history_tab(history_list)
-    # Create the new Captions tab instance
-    caption_comps = create_captions_tab()
+    # Create the Captions tab instance, passing initial choices # <--- FIXED ---
+    caption_comps = create_captions_tab(
+        initial_agent_team_choices=initial_agent_team_choices
+    )
 
     create_footer()
 
     # --- Define Wrapper/Helper Callbacks specific to app.py ---
-    # This function refreshes the combined Agent/Team dropdown in the CHAT tab
-    def refresh_agent_team_dropdown_wrapper(use_default, use_custom, file_agents_dict, teams_dict):
-         print("Refreshing Chat tab agent/team dropdown...")
+    # This function refreshes the combined Agent/Team dropdown in the CHAT tab AND CAPTIONS TAB
+    def refresh_agent_team_dropdowns_wrapper(use_default, use_custom, file_agents_dict, teams_dict):
+         print("Refreshing Chat & Captions tab agent/team dropdowns...") # Updated print
          current_settings = load_settings()
          current_settings["using_default_agents"] = use_default; current_settings["using_custom_agents"] = use_custom
          combined_roles = load_all_roles(current_settings, file_agents=file_agents_dict)
@@ -176,8 +180,11 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          team_display_choices = sorted([f"[Team] {name}" for name in teams_dict.keys()])
          all_choices = ["(Direct Agent Call)"] + team_display_choices + role_display_choices
          new_value = all_choices[0] if all_choices else None
-         print(f" Chat Agent/Team choices updated: {len(all_choices)} total")
-         return gr.Dropdown.update(choices=all_choices, value=new_value)
+         print(f" Chat/Captions Agent/Team choices updated: {len(all_choices)} total")
+         # Return updates for BOTH dropdowns
+         chat_update = gr.Dropdown.update(choices=all_choices, value=new_value)
+         caption_update = gr.Dropdown.update(choices=all_choices, value=new_value) # Add update for captions dropdown
+         return chat_update, caption_update # Return tuple of updates
 
     # This function refreshes the AGENT dropdown in the TEAM EDITOR tab
     def refresh_available_agents_for_editor_wrapper(use_default, use_custom, file_agents_dict):
@@ -215,38 +222,47 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          inputs=[chat_comps['agent_file_upload']],
          outputs=agent_file_upload_outputs
     )
-    # After file upload, refresh BOTH dropdowns
+    # After file upload, refresh Chat, Captions, and Editor dropdowns # <--- FIXED ---
     refresh_trigger_inputs = [
         settings_comps['settings_use_default'], settings_comps['settings_use_custom'],
-        chat_comps['loaded_file_agents_state'], teams_data_state # Needs teams too for chat dropdown
+        chat_comps['loaded_file_agents_state'], teams_data_state # Needs teams too for chat/captions dropdown
     ]
     refresh_editor_inputs = [
         settings_comps['settings_use_default'], settings_comps['settings_use_custom'],
         chat_comps['loaded_file_agents_state']
     ]
     file_upload_event.then(
-        fn=refresh_agent_team_dropdown_wrapper, inputs=refresh_trigger_inputs,
-        outputs=[chat_comps['role_dropdown']] # Update Chat dropdown
+        # Update Chat & Captions agent/team dropdowns
+        fn=refresh_agent_team_dropdowns_wrapper, inputs=refresh_trigger_inputs,
+        outputs=[chat_comps['role_dropdown'], caption_comps['caption_agent_selector']]
     ).then(
          fn=refresh_available_agents_for_editor_wrapper, # Update Editor's agent pool
          inputs=refresh_editor_inputs,
          outputs=[editor_comps['agent_to_add_dropdown'], all_available_agents_display_state] # Update dropdown & state
     )
 
-    # Checkbox changes trigger dropdown refreshes
+    # Checkbox changes trigger dropdown refreshes (Chat, Captions, Editor) # <--- FIXED ---
     checkbox_refresh_trigger_inputs = [
+        settings_comps['settings_use_default'], settings_comps['settings_use_custom'],
+        chat_comps['loaded_file_agents_state'], teams_data_state # Include teams for chat/captions dropdown
+    ]
+    checkbox_refresh_editor_inputs = [
         settings_comps['settings_use_default'], settings_comps['settings_use_custom'],
         chat_comps['loaded_file_agents_state']
     ]
     settings_comps['settings_use_default'].change(
-        fn=refresh_agent_team_dropdown_wrapper, inputs=refresh_trigger_inputs, outputs=[chat_comps['role_dropdown']]
+        fn=refresh_agent_team_dropdowns_wrapper, inputs=checkbox_refresh_trigger_inputs,
+        outputs=[chat_comps['role_dropdown'], caption_comps['caption_agent_selector']] # Update Chat & Captions dropdowns
     ).then(
-        fn=refresh_available_agents_for_editor_wrapper, inputs=checkbox_refresh_trigger_inputs, outputs=[editor_comps['agent_to_add_dropdown'], all_available_agents_display_state]
+        fn=refresh_available_agents_for_editor_wrapper, inputs=checkbox_refresh_editor_inputs,
+        outputs=[editor_comps['agent_to_add_dropdown'], all_available_agents_display_state] # Update Editor dropdown
     )
     settings_comps['settings_use_custom'].change(
-        fn=refresh_agent_team_dropdown_wrapper, inputs=refresh_trigger_inputs, outputs=[chat_comps['role_dropdown']]
+        fn=refresh_agent_team_dropdowns_wrapper, inputs=checkbox_refresh_trigger_inputs,
+        outputs=[chat_comps['role_dropdown'], caption_comps['caption_agent_selector']] # Update Chat & Captions dropdowns
     ).then(
-        fn=refresh_available_agents_for_editor_wrapper, inputs=checkbox_refresh_trigger_inputs, outputs=[editor_comps['agent_to_add_dropdown'], all_available_agents_display_state]
+        fn=refresh_available_agents_for_editor_wrapper, inputs=checkbox_refresh_editor_inputs,
+        outputs=[editor_comps['agent_to_add_dropdown'], all_available_agents_display_state] # Update Editor dropdown
     )
 
     # Update max tokens slider based on limiter choice
@@ -404,43 +420,43 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         ]
     )
 
-    # Save Team Button needs to update team state and dropdowns
-    # CORRECTED INPUTS: Add settings_state and loaded_file_agents_state
+    # Save Team Button needs to update team state and dropdowns (Chat & Captions) # <--- FIXED ---
     save_team_inputs = [
         editor_comps['team_name_textbox'],
         editor_comps['team_description_textbox'],
         editor_comps['assembly_strategy_radio'],
         editor_comps['current_team_editor_state'], # Pass internal state with steps list
         teams_data_state, # Pass state with all teams to update
-        settings_state, # ADDED: Needed by logic to update dropdowns
-        chat_comps['loaded_file_agents_state'] # ADDED: Needed by logic to update dropdowns
+        settings_state, # Needed by logic to update dropdowns
+        chat_comps['loaded_file_agents_state'] # Needed by logic to update dropdowns
     ]
     save_team_outputs = [
         teams_data_state,                       # 1. Update the main state holding all teams
         editor_comps['team_select_dropdown'],   # 2. Update the editor's team selection dropdown
         chat_comps['role_dropdown'],            # 3. Update the chat tab's agent/team dropdown
-        editor_comps['save_status_textbox']     # 4. Show status message
+        caption_comps['caption_agent_selector'],# 4. Update the captions tab's agent/team dropdown # <-- ADDED
+        editor_comps['save_status_textbox']     # 5. Show status message
     ]
     editor_comps['save_team_button'].click(
-        fn=save_team_from_editor, # Logic from core/app_logic.py
-        inputs=save_team_inputs,  # Use the corrected input list
-        outputs=save_team_outputs
+        fn=save_team_from_editor, # Logic in core/app_logic.py needs corresponding output adjustment
+        inputs=save_team_inputs,
+        outputs=save_team_outputs # Pass the updated list of outputs
     )
 
-    # Delete Team Button needs to update team state, dropdowns, and clear editor
-    # CORRECTED INPUTS: Add settings_state and loaded_file_agents_state
+    # Delete Team Button needs to update team state, dropdowns (Chat & Captions), and clear editor # <--- FIXED ---
     delete_team_inputs = [
         editor_comps['team_select_dropdown'], # Name to delete
         teams_data_state,                     # All teams data state
-        settings_state,                       # ADDED: Needed by logic to update dropdowns
-        chat_comps['loaded_file_agents_state'] # ADDED: Needed by logic to update dropdowns
+        settings_state,                       # Needed by logic to update dropdowns
+        chat_comps['loaded_file_agents_state'] # Needed by logic to update dropdowns
     ]
     delete_outputs = [
          teams_data_state,                      # 1. Update main teams state
          editor_comps['team_select_dropdown'],  # 2. Update editor dropdown
          chat_comps['role_dropdown'],           # 3. Update chat dropdown
-         editor_comps['save_status_textbox'],   # 4. Status message
-         # 5-9: Outputs to clear editor fields after delete (from clear_team_editor return)
+         caption_comps['caption_agent_selector'],# 4. Update the captions tab's agent/team dropdown # <-- ADDED
+         editor_comps['save_status_textbox'],   # 5. Status message
+         # 6-10: Outputs to clear editor fields after delete (from clear_team_editor return)
          editor_comps['team_name_textbox'],
          editor_comps['team_description_textbox'],
          editor_comps['steps_display_json'],
@@ -448,9 +464,9 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          editor_comps['current_team_editor_state']
     ]
     editor_comps['delete_team_button'].click(
-        fn=delete_team_logic, # Logic from core/app_logic.py
-        inputs=delete_team_inputs, # Use the corrected input list
-        outputs=delete_outputs
+        fn=delete_team_logic, # Logic in core/app_logic.py needs corresponding output adjustment
+        inputs=delete_team_inputs,
+        outputs=delete_outputs # Pass the updated list of outputs
     )
 
 
@@ -562,6 +578,58 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         outputs=[
             caption_comps['captions_status_display'],
             caption_data_state # Update state with modified captions
+        ]
+    )
+
+    # --- NEW: Wire Generate Caption Buttons ---
+    # Generate for Selected
+    caption_comps['caption_generate_selected_button'].click(
+        fn=generate_captions_for_selected, # Function to be created in captioning_logic.py
+        inputs=[ # Inputs needed by the generation logic
+            caption_comps['captions_image_selector'], # Selected image filenames (list)
+            caption_comps['caption_agent_selector'], # Selected Agent/Team name
+            caption_comps['caption_generate_mode'], # Overwrite/Skip/etc.
+            caption_image_paths_state,      # State: filename -> path
+            caption_data_state,             # State: filename -> caption (to potentially update)
+            settings_state,                 # State: App settings (for Ollama URL, options)
+            models_data_state,              # State: Available models
+            limiters_data_state,            # State: Limiters
+            teams_data_state,               # State: Team definitions
+            chat_comps['loaded_file_agents_state'], # State: File agents
+            history_list_state,             # State: Persistent history (for logging)
+            session_history_state,          # State: Session history (for logging/display)
+        ],
+        outputs=[ # Outputs to update
+            caption_comps['captions_status_display'], # Display status messages
+            caption_data_state,                       # Update caption state if captions changed
+            # Optionally update the caption display if only one image was selected and processed
+            caption_comps['captions_caption_display'], # Update display with generated caption
+            session_history_state # Pass back updated session history list
+        ]
+    )
+
+    # Generate for All
+    caption_comps['caption_generate_all_button'].click(
+        fn=generate_captions_for_all, # Function to be created in captioning_logic.py
+        inputs=[ # Inputs needed by the generation logic
+            caption_image_paths_state,      # State: filename -> path (all loaded images)
+            caption_data_state,             # State: filename -> caption (all loaded captions)
+            caption_comps['caption_agent_selector'], # Selected Agent/Team name
+            caption_comps['caption_generate_mode'], # Overwrite/Skip/etc.
+            settings_state,                 # State: App settings
+            models_data_state,              # State: Available models
+            limiters_data_state,            # State: Limiters
+            teams_data_state,               # State: Team definitions
+            chat_comps['loaded_file_agents_state'], # State: File agents
+            history_list_state,             # State: Persistent history
+            session_history_state,          # State: Session history
+        ],
+        outputs=[ # Outputs to update
+            caption_comps['captions_status_display'], # Display status messages
+            caption_data_state,                       # Update caption state with all generated captions
+            # Update caption display with the caption of the *last* processed image in the batch
+            caption_comps['captions_caption_display'],
+            session_history_state # Pass back updated session history list
         ]
     )
 

@@ -3,8 +3,15 @@ import os
 import gradio as gr # Only needed if using gr.update directly, which we avoid here
 from PIL import Image # Keep PIL needed for checking image files
 from .utils import get_absolute_path, load_json # Assuming load_json might be needed if captions are complex
+# --- NEW: Import dependencies needed for agent calls ---
+import time
+from .app_logic import execute_chat_or_team # Import the router function
+from . import history_manager as history # For logging
 
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+
+# --- (Existing functions: load_images_and_captions, update_caption_display, save_caption, batch_edit_captions) ---
+# ... Keep existing functions here ...
 
 def load_images_and_captions(folder_path: str):
     """
@@ -243,12 +250,122 @@ def batch_edit_captions(
     # Return status and the fully updated captions dictionary
     return status, updated_captions
 
-# --- Placeholder for Agent-based captioning ---
-# To be implemented in the next phase
-def generate_caption_with_agent(*args, **kwargs):
-    print("Agent caption generation not yet implemented.")
-    return "Agent caption generation is not yet available.", {}, {}, {} # Match expected outputs placeholder
+# --- NEW Placeholder Functions for Agent Caption Generation ---
 
-def batch_generate_captions(*args, **kwargs):
-    print("Batch agent caption generation not yet implemented.")
-    return "Batch agent caption generation is not yet available."
+def generate_captions_for_selected(
+    selected_filenames: list | None,
+    agent_or_team_display_name: str,
+    generate_mode: str,
+    image_paths: dict,
+    current_captions: dict,
+    settings: dict,
+    models_data: list,
+    limiters_data: dict,
+    teams_data: dict,
+    file_agents: dict,
+    history_list: list,
+    session_history: list
+    ) -> tuple[str, dict, str, list]:
+    """
+    Placeholder: Generates captions for selected images using an agent/team.
+
+    Returns:
+        tuple: (status_message, updated_captions_dict, last_caption_generated, updated_session_history)
+    """
+    print("\n--- Received Request: Generate Captions for Selected ---")
+    print(f"  Selected Files: {selected_filenames}")
+    print(f"  Agent/Team: {agent_or_team_display_name}")
+    print(f"  Mode: {generate_mode}")
+
+    if not selected_filenames:
+        return "No images selected to generate captions for.", current_captions, "", session_history
+
+    # Basic check for vision model requirement (can be refined)
+    is_vision_agent = "(VISION)" in agent_or_team_display_name or "[Team]" in agent_or_team_display_name
+    # More robust check would involve looking up the actual agent/team and base model
+    if not is_vision_agent: # Simple placeholder check
+         # Check if the selected agent likely supports vision
+         # This is simplistic; real check might involve looking up model in models.json
+         # based on agent/team config or assuming specific agents like 'Llava' are vision-capable.
+         pass # Allow non-vision agents for now, they might just use filename/context
+         # A better check might look up the selected agent/team's underlying model
+         # return f"Error: Selected agent/team '{agent_or_team_display_name}' might not support vision.", current_captions, "", session_history
+
+
+    status = f"Caption generation for {len(selected_filenames)} selected images started...\n(NOT YET IMPLEMENTED)"
+    updated_captions = current_captions.copy()
+    last_caption = ""
+
+    # --- TODO: Implement Loop ---
+    # 1. Iterate through selected_filenames
+    # 2. For each filename:
+    #    a. Check if file exists based on image_paths[filename]
+    #    b. Check generate_mode (Overwrite, Skip etc.) against existing text file
+    #    c. Load image using PIL: `img = Image.open(image_paths[filename])`
+    #    d. Construct prompt (e.g., "Describe this image.")
+    #    e. Call execute_chat_or_team:
+    #       response, _, model_name_used, session_history = execute_chat_or_team(...)
+    #       Pass the loaded image object in a list: `single_image_pil=[img]` (or appropriate arg name)
+    #       Pass necessary state data (settings, models, teams, etc.)
+    #       Pass agent_or_team_display_name
+    #       Pass a dummy user_input="" or a fixed prompt like "Describe the image."
+    #       Use reasonable max_tokens, file handling ('None'), limiter ('Off'), etc.
+    #    f. Process the `response` (clean up, etc.) -> generated_caption
+    #    g. Save the generated_caption to the corresponding .txt file based on generate_mode
+    #    h. Update updated_captions[filename] = generated_caption
+    #    i. Update status message string
+    #    j. Store the last generated caption
+
+    # Placeholder return matching the output signature in app.py
+    # outputs=[status_display, caption_data_state, caption_display, session_history_state]
+    return status, updated_captions, last_caption, session_history
+
+
+def generate_captions_for_all(
+    image_paths: dict,
+    current_captions: dict,
+    agent_or_team_display_name: str,
+    generate_mode: str,
+    settings: dict,
+    models_data: list,
+    limiters_data: dict,
+    teams_data: dict,
+    file_agents: dict,
+    history_list: list,
+    session_history: list
+    ) -> tuple[str, dict, str, list]:
+    """
+    Placeholder: Generates captions for ALL loaded images using an agent/team.
+
+    Returns:
+        tuple: (status_message, updated_captions_dict, last_caption_generated, updated_session_history)
+    """
+    print("\n--- Received Request: Generate Captions for ALL ---")
+    print(f"  Agent/Team: {agent_or_team_display_name}")
+    print(f"  Mode: {generate_mode}")
+
+    if not image_paths:
+        return "No images loaded to generate captions for.", current_captions, "", session_history
+
+    all_filenames = list(image_paths.keys())
+    status = f"Batch caption generation for {len(all_filenames)} images started...\n(NOT YET IMPLEMENTED)"
+    updated_captions = current_captions.copy()
+    last_caption = ""
+
+    # --- TODO: Implement Loop (similar to generate_captions_for_selected) ---
+    # Iterate through all_filenames instead of selected_filenames
+
+    # Placeholder return matching the output signature in app.py
+    # outputs=[status_display, caption_data_state, caption_display, session_history_state]
+    return status, updated_captions, last_caption, session_history
+
+
+# --- Original Placeholder ---
+# Kept for reference, but replaced by the above
+# def generate_caption_with_agent(*args, **kwargs):
+#     print("Agent caption generation not yet implemented.")
+#     return "Agent caption generation is not yet available.", {}, {}, {} # Match expected outputs placeholder
+
+# def batch_generate_captions(*args, **kwargs):
+#     print("Batch agent caption generation not yet implemented.")
+#     return "Batch agent caption generation is not yet available."
