@@ -27,7 +27,7 @@
         "numa": false,
         "num_ctx": 2048,
         "num_batch": 512,
-        "num_gpu": 1,
+        "num_gpu": 999,
         "main_gpu": 0,
         "low_vram": false,
         "f16_kv": true,
