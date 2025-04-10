@@ -14,7 +14,20 @@ def get_absolute_path(relative_path):
     # Simpler: os.path.join handles mixed separators too
     return os.path.join(PROJECT_ROOT, relative_path)
 
-
+def save_json(filepath, data, is_relative=False):
+    """Saves data to a JSON file. Handles relative paths."""
+    full_path = get_absolute_path(filepath) if is_relative else filepath
+    try:
+        # Ensure parent directory exists
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False) # Use indent=2 for protocols
+        print(f"Successfully saved JSON to {full_path}")
+        return True
+    except Exception as e:
+        print(f"ERROR saving JSON to {full_path}: {e}")
+        return False
+    
 def load_json(file_path, is_relative=True):
     """
     Loads a JSON file. Handles relative paths from project root.

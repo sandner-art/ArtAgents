@@ -12,6 +12,8 @@ import atexit
 from core.utils import load_json, get_theme_object, get_absolute_path # Removed format_json_to_html_table
 from core.ollama_checker import OllamaStatusChecker
 from core import history_manager as history # Use alias for clarity
+from core.sweep_manager import run_sweep # Import sweep logic
+from ui.sweep_tab import create_sweep_tab # Import sweep UI tab creator
 # Import logic functions that will be used as callbacks
 from core.app_logic import (
     execute_chat_or_team, # Use the router function for submit
@@ -98,7 +100,7 @@ initial_agent_team_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" 
 # Generate initial list of ALL available agents for editor's dropdown
 all_available_agents_initial = load_all_roles(settings, file_agents={}) # Load all non-file agents initially
 all_available_agent_display_names_initial = sorted([get_role_display_name(name) for name in all_available_agents_initial.keys()])
-
+all_initial_worker_model_choices = sorted(list(set([name.replace(" (VISION)","") for name in model_names_with_vision])))
 
 # --- Perform Initial Startup Check (Console Feedback Only) ---
 startup_checker = OllamaStatusChecker(OLLAMA_API_URL) # Pass full URL
@@ -138,13 +140,18 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         initial_team_names=sorted(team_names),
         initial_available_agent_names=all_available_agent_display_names_initial # Pass initial list
     )
-    roles_comps = create_roles_tabs(
-         load_json(DEFAULT_ROLES_FILE, is_relative=True), # Load fresh for display
-         load_json(CUSTOM_ROLES_FILE, is_relative=True)  # Load fresh for display
+    # Create the new Sweep tab
+    sweep_comps = create_sweep_tab(
+        initial_team_names=sorted(team_names), # Use loaded team names
+        initial_model_names=all_initial_worker_model_choices # Use filtered model names
     )
-    history_comps = create_history_tab(history_list) # Pass initial history list for display
+    roles_comps = create_roles_tabs(
+         load_json(DEFAULT_ROLES_FILE, is_relative=True),
+         load_json(CUSTOM_ROLES_FILE, is_relative=True)
+    )
+    history_comps = create_history_tab(history_list)
 
-    create_footer() # Add common footer
+    create_footer()
 
     # --- Define Wrapper/Helper Callbacks specific to app.py ---
     # This function refreshes the combined Agent/Team dropdown in the CHAT tab
@@ -444,6 +451,29 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     history_comps['no_clear_button'].click(
          fn=hide_clear_confirmation, inputs=[], outputs=[history_comps['confirm_clear_group']]
     )
+
+    # -- Experiment Sweep Tab Wiring --
+# ArtAgent/app.py - inside with gr.Blocks()
+
+    # --- Wire Event Handlers ---
+    # ... (other handlers) ...
+
+    # -- Experiment Sweep Tab Wiring --
+    # -- Experiment Sweep Tab Wiring --
+    sweep_comps['sweep_start_button'].click(
+        fn=run_sweep, # Call the modified run_sweep
+        inputs=[ # Inputs remain the same
+            sweep_comps['sweep_prompts_input'],
+            sweep_comps['sweep_teams_select'],
+            sweep_comps['sweep_models_select'],
+            sweep_comps['sweep_output_folder_input'],
+            sweep_comps['sweep_log_intermediate_checkbox'],
+            settings_state,
+            teams_data_state,
+        ],
+        outputs=[sweep_comps['sweep_status_display']]
+    )  # REMOVE .queue() if using concurrency_limit
+
 
 # --- atexit handler ---
 def on_exit():
