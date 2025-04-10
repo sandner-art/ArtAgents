@@ -2,7 +2,7 @@
 import gradio as gr
 import json
 import os
-from PIL import Image
+from PIL import Image # Ensure Image is imported
 import numpy as np
 import time
 
@@ -19,6 +19,7 @@ from . import agent_manager # Import the new manager
 SETTINGS_FILE = 'settings.json'
 MODELS_FILE = 'models.json'
 LIMITERS_FILE = 'limiters.json'
+PROFILES_FILE = 'ollama_profiles.json' # Added for consistency if needed later
 AGENT_TEAMS_FILE = 'agent_teams.json' # Define team file constant
 DEFAULT_ROLES_FILE = 'agents/agent_roles.json' # Define here if needed by logic
 CUSTOM_ROLES_FILE = 'agents/custom_agent_roles.json' # Define here if needed by logic
@@ -40,7 +41,7 @@ def save_teams_to_file(teams_data):
 def execute_chat_or_team(
     # UI Inputs (Common)
     folder_path, user_input, model_with_vision, max_tokens_ui,
-    file_handling_option, limiter_handling_option, single_image_np,
+    file_handling_option, limiter_handling_option, single_image_input, # Renamed from single_image_np
     use_ollama_api_options, release_model_on_change,
     # UI Inputs (Specific)
     selected_role_or_team, # This dropdown now selects EITHER a role OR a team
@@ -98,15 +99,16 @@ def execute_chat_or_team(
         for m in models_data_state:
             m_name = m.get("name")
             if not m_name: continue
+            # Use model_with_vision passed to this function
             if m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision:
                 worker_model_name = m_name
                 break
         if not worker_model_name:
-             return "Error: Could not determine worker model name for team.", session_history_text, None, new_session_history_list
+             # If called from captioning, model_with_vision might be None, try agent default? No, captioning passes model now.
+             return f"Error: Could not determine worker model name for team from input '{model_with_vision}'.", session_history_text, None, new_session_history_list
 
         # Call the Agent Manager's workflow execution function
         # It returns the final output string, the *updated persistent history list*, and intermediate steps (or None)
-        # CORRECTED: Unpack all three return values
         final_output, updated_persistent_history_list, _ = agent_manager.run_team_workflow(
             team_name=team_name,
             team_definition=team_definition,
@@ -114,25 +116,19 @@ def execute_chat_or_team(
             initial_settings=current_settings,
             all_roles_data=all_roles_data,
             history_list=list(history_list_state), # Pass copy of persistent history
-            worker_model_name=worker_model_name
-            # Note: return_intermediate_steps defaults to False inside run_team_workflow
-            # so we don't explicitly pass it here, but we still need to unpack the third value.
+            worker_model_name=worker_model_name,
+            # TODO: Handle images if team workflow needs them (requires passing single_image_input)
         )
-
-        # The updated_persistent_history_list returned by the workflow IS the new state
-        # for persistent history. We need to update history_list_state in app.py,
-        # but this function currently doesn't return it. Let's fix this later if needed.
-        # For now, history.add_to_history within the manager updates the file directly.
+        # Persistent history state update is implicit via history.add_to_history inside manager
 
         # Update session history list with a summary of the workflow run
-        summary_entry = f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\nWorkflow Run: '{team_name}'\nFinal Output Length: {len(final_output)}\n---\n(Full steps in Persistent History)"
+        summary_entry = f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\nWorkflow Run: '{team_name}' (Model: {worker_model_name})\nFinal Output Length: {len(final_output)}\n---\n(Full steps in Persistent History)"
         new_session_history_list.append(summary_entry)
 
         # Update return values
         response_text = final_output
         session_history_text = "\n---\n".join(new_session_history_list)
         model_name_state_update = None # No single model state for teams
-        # Persistent history state (history_list_state) is updated implicitly via history.add_to_history inside the manager
 
     elif selected_role_or_team == "(Direct Agent Call)" or not selected_role_or_team:
         print("Info: Direct Agent Call selected, or no agent/team chosen.")
@@ -150,11 +146,11 @@ def execute_chat_or_team(
             folder_path=folder_path,
             role_display_name=selected_role_or_team, # The selected item is the role display name
             user_input=user_input,
-            model_with_vision=model_with_vision,
+            model_with_vision=model_with_vision, # Model name from UI/Caller
             max_tokens_ui=max_tokens_ui,
             file_handling_option=file_handling_option,
             limiter_handling_option=limiter_handling_option,
-            single_image_np=single_image_np,
+            single_image_input=single_image_input, # Pass the input image (PIL or Numpy)
             current_settings=current_settings, # Pass settings from state
             use_ollama_api_options=use_ollama_api_options,
             release_model_on_change=release_model_on_change,
@@ -171,10 +167,11 @@ def execute_chat_or_team(
 
 
 # --- Single Agent Chat Logic ---
+# CORRECTED to handle PIL Image input
 def chat_logic(
     # UI Inputs
     folder_path, role_display_name, user_input, model_with_vision, max_tokens_ui,
-    file_handling_option, limiter_handling_option, single_image_np,
+    file_handling_option, limiter_handling_option, single_image_input, # Renamed for clarity
     use_ollama_api_options, release_model_on_change,
     # State Inputs
     current_settings, models_data_state, limiters_data_state,
@@ -196,11 +193,18 @@ def chat_logic(
     # 1. Find Model Name and Info
     model_name = None; model_info = None
     if not models_data_state: return "Error: Models data not loaded.", "\n---\n".join(current_session_history), None, current_session_history
+    if not model_with_vision: return "Error: No model specified for agent execution.", "\n---\n".join(current_session_history), None, current_session_history
     for m in models_data_state:
          m_name = m.get("name");
          if not m_name: continue
-         if m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision: model_name = m_name; model_info = m; break
-    if not model_name or not model_info: return "Error: Selected model info not found.", "\n---\n".join(current_session_history), None, current_session_history
+         # Match base name or display name (e.g., "llava:latest" or "llava:latest (VISION)")
+         if m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision:
+             model_name = m_name
+             model_info = m
+             break
+    if not model_name or not model_info: return f"Error: Selected model info not found for '{model_with_vision}'.", "\n---\n".join(current_session_history), None, current_session_history
+    print(f"  Using model: {model_name}")
+
 
     # 2. Handle Model Release
     if release_model_on_change and selected_model_tracker_value and selected_model_tracker_value != model_name:
@@ -208,44 +212,83 @@ def chat_logic(
         ollama_manager.release_model(selected_model_tracker_value, current_settings.get("ollama_url"))
 
     # 3. Prepare Prompt and Options
-    # Use limiters_data_state passed in
     limiter_settings = limiters_data_state.get(limiter_handling_option, {})
     limiter_prompt_format = limiter_settings.get("limiter_prompt_format", "")
     limiter_token_slider = limiter_settings.get("limiter_token_slider")
     effective_max_tokens = min(max_tokens_ui, limiter_token_slider) if limiter_handling_option != "Off" and limiter_token_slider is not None else max_tokens_ui
     role_description = roles_data_current.get(actual_role_name, {}).get("description", "Unknown Role")
-    prompt = f"Role: {actual_role_name} - {role_description}\n{limiter_prompt_format}\nUser Input: {user_input}\n"
+    # Construct prompt - ensure limiter format comes before user input if applicable
+    prompt_parts = [f"Role: {actual_role_name} - {role_description}"]
+    if limiter_prompt_format: prompt_parts.append(limiter_prompt_format)
+    prompt_parts.append(f"User Input: {user_input}")
+    prompt = "\n".join(prompt_parts) + "\n" # Add final newline
+
     agent_ollama_options = {} # Agent function will handle merging based on settings/role/etc
 
-    # 4. Handle Image Input
-    pil_images_list = []; is_single_image_mode = False; image_source_info = "[None - Text Only]"
-    if single_image_np is not None and isinstance(single_image_np, np.ndarray):
-        if model_info.get("vision"):
+    # --- 4. Handle Image Input (REVISED LOGIC) ---
+    pil_images_list = []
+    is_single_image_mode = False
+    image_source_info = "[None - Text Only]"
+
+    # Check if input is not None and if the selected model supports vision
+    if single_image_input is not None and model_info.get("vision"):
+        # Check if input is already a PIL Image (coming from captioning logic)
+        # Use PIL.Image directly for the check
+        if isinstance(single_image_input, Image.Image):
+            print("  Processing PIL Image input.")
+            pil_images_list = [single_image_input]
+            is_single_image_mode = True
+            image_source_info = "[Single PIL Image]"
+        # Check if input is a numpy array (coming from Gradio Image component)
+        elif isinstance(single_image_input, np.ndarray):
+            print("  Processing Numpy Image input.")
             try:
-                pil_image = Image.fromarray(single_image_np.astype('uint8'))
-                pil_images_list = [pil_image]; is_single_image_mode = True; image_source_info = "[Single Upload]"
-            except Exception as e: return f"Error processing single image: {e}", "\n---\n".join(current_session_history), model_name, current_session_history
-        else: print("Warning: Single image provided, but model lacks vision.")
+                pil_image = Image.fromarray(single_image_input.astype('uint8'))
+                pil_images_list = [pil_image]
+                is_single_image_mode = True
+                image_source_info = "[Single Upload/Numpy]"
+            except Exception as e:
+                return f"Error processing single numpy image: {e}", "\n---\n".join(current_session_history), model_name, current_session_history
+        else:
+            # Handle unexpected input type if necessary
+            print(f"Warning: Received single image input of unexpected type: {type(single_image_input)}. Ignoring.")
+
+    elif single_image_input is not None and not model_info.get("vision"):
+        print("Warning: Single image provided, but selected model lacks vision.")
+        image_source_info = "[Single Image Ignored - No Vision]"
+    # --- End Revised Image Handling ---
+
+    # --- Add Debug Print for final arguments to ollama_agent ---
+    print(f"DEBUG CHAT_LOGIC: Calling get_llm_response with:")
+    print(f"  Role: {actual_role_name}")
+    print(f"  Model: {model_name}")
+    print(f"  Prompt Start: {prompt[:150]}...")
+    print(f"  Images Type: {type(pil_images_list)}, Count: {len(pil_images_list)}")
+    if pil_images_list: print(f"  First Image Type in list: {type(pil_images_list[0])}")
+    print(f"  Max Tokens: {effective_max_tokens}")
+    # --- End Debug Print ---
 
     # 5. Determine Mode and Call Agent
     final_response = "Processing..."
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     entry_prefix = f"Timestamp: {timestamp}\nRole: {actual_role_name}\nModel: {model_name}\nInput: {user_input}"
 
-    if is_single_image_mode or (not folder_path or not os.path.isdir(folder_path)):
-         # Single Image or Text-Only Call
-         print(f"Calling agent (Single/Text): model={model_name}, role={actual_role_name}")
+    if is_single_image_mode:
+         # Single Image Call (PIL object is now in pil_images_list)
+         print(f"Calling agent (Single Image): model={model_name}, role={actual_role_name}, image_source={image_source_info}")
          final_response = get_llm_response(
              role=actual_role_name, prompt=prompt, model=model_name, settings=current_settings,
              roles_data=roles_data_current, images=pil_images_list, max_tokens=effective_max_tokens,
              ollama_api_options=agent_ollama_options
          )
-         entry = f"{entry_prefix}\nImage: {image_source_info}\nResponse:\n{final_response}\n---\n"
+         # Replace potential base64 data with placeholder for history log display
+         log_image_source_info = "[Image Data Sent]" if pil_images_list else image_source_info
+         entry = f"{entry_prefix}\nImage: {log_image_source_info}\nResponse:\n{final_response}\n---\n"
          history_list = history.add_to_history(history_list, entry) # Updates persistent
          current_session_history.append(entry) # Updates session list copy
 
     elif folder_path and os.path.isdir(folder_path):
-        # Folder Processing Call
+        # Folder Processing Call (Existing logic)
         if not model_info.get("vision"):
              print("Warning: Folder path provided, but model lacks vision. Processing text-only.")
              final_response = get_llm_response(
@@ -260,75 +303,96 @@ def chat_logic(
              # Process folder with vision model (image by image)
              print(f"Processing image folder: {folder_path}")
              confirmation_messages = []; processed_files = 0; base_prompt = prompt
-             try: files_in_folder = sorted([f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f)) and f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))])
+             try:
+                 files_in_folder = sorted([
+                     f for f in os.listdir(folder_path)
+                     if os.path.isfile(os.path.join(folder_path, f)) and f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'))
+                 ])
              except Exception as list_e: return f"Error listing folder: {list_e}", "\n---\n".join(current_session_history), model_name, current_session_history
 
              for file_name in files_in_folder:
                  file_path = os.path.join(folder_path, file_name)
+                 loop_img = None # Initialize loop_img
                  try:
                       print(f"  Processing file: {file_name}")
-                      image = Image.open(file_path); image_prompt = f"{base_prompt}\nImage Context: Analyzing '{file_name}'\n"
+                      loop_img = Image.open(file_path)
+                      image_prompt = f"{base_prompt}\nImage Context: Analyzing '{file_name}'\n"
                       img_response = get_llm_response(
                            role=actual_role_name, prompt=image_prompt, model=model_name, settings=current_settings,
-                           roles_data=roles_data_current, images=[image], max_tokens=effective_max_tokens,
+                           roles_data=roles_data_current, images=[loop_img], max_tokens=effective_max_tokens,
                            ollama_api_options=agent_ollama_options
                       )
 
-                      # --- File Handling Logic --- Corrected Indentation ---
+                      # --- File Handling Logic ---
                       base_name = os.path.splitext(file_name)[0]
                       output_file = os.path.join(folder_path, f"{base_name}.txt")
-                      action_taken = "Skipped" # Default if skipped
+                      action_taken = "Skipped"
                       file_exists = os.path.exists(output_file)
+                      original_content = ""
 
-                      if not file_exists or file_handling_option == "Overwrite":
-                          with open(output_file, 'w', encoding='utf-8') as f:
-                              f.write(img_response)
-                          action_taken = "Written" if not file_exists else "Overwritten"
+                      if file_exists and file_handling_option != "Overwrite" and file_handling_option != "Skip":
+                          try:
+                              with open(output_file, 'r', encoding='utf-8') as f:
+                                  original_content = f.read().strip()
+                          except Exception as read_e:
+                              print(f"  Warning: Could not read existing file {output_file}: {read_e}")
 
-                      elif file_handling_option == "Append":
-                           with open(output_file, 'a', encoding='utf-8') as f:
-                               f.write("\n\n---\n\n" + img_response)
-                           action_taken = "Appended"
-
-                      elif file_handling_option == "Prepend":
-                           try:
-                              original_content = ""
-                              if file_exists:
-                                  with open(output_file, 'r', encoding='utf-8') as f:
-                                      original_content = f.read()
+                      # Decide action based on mode and existence
+                      if file_handling_option == "Overwrite" or not file_exists:
+                          if img_response: # Only write if response is not empty
                               with open(output_file, 'w', encoding='utf-8') as f:
-                                  f.write(img_response + "\n\n---\n\n" + original_content)
+                                  f.write(img_response)
+                              action_taken = "Written" if not file_exists else "Overwritten"
+                          else: action_taken = "Skipped (Empty Response)"
+                      elif file_handling_option == "Append":
+                          if img_response:
+                              separator = "\n\n---\n\n" if original_content else ""
+                              with open(output_file, 'w', encoding='utf-8') as f:
+                                  f.write(original_content + separator + img_response)
+                              action_taken = "Appended"
+                          else: action_taken = "Skipped (Empty Response)"
+                      elif file_handling_option == "Prepend":
+                          if img_response:
+                              separator = "\n\n---\n\n" if original_content else ""
+                              with open(output_file, 'w', encoding='utf-8') as f:
+                                  f.write(img_response + separator + original_content)
                               action_taken = "Prepended"
-                           except Exception as prepend_e:
-                               action_taken = f"Prepend Error: {prepend_e}"
-                               print(f"  Error during prepend for {file_name}: {prepend_e}")
-                               # Optionally write the new content anyway if prepend fails?
-                               try:
-                                   with open(output_file, 'w', encoding='utf-8') as f:
-                                       f.write(img_response)
-                                   action_taken += " (Wrote new content instead)"
-                               except Exception as write_e:
-                                   action_taken += f" (Failed to write new content: {write_e})"
+                          else: action_taken = "Skipped (Empty Response)"
+                      # Skip case is handled by default action_taken="Skipped"
 
-                      elif file_handling_option == "Skip":
-                           # No file operation needed, action_taken remains "Skipped"
-                           pass
-                      # --- End Corrected File Handling ---
+                      # --- End File Handling ---
 
                       confirmation_messages.append(f"  - {file_name}: {action_taken} -> {base_name}.txt")
                       # History Update per Image
-                      entry = f"{entry_prefix}\nImage: {file_name}\nResponse:\n{img_response}\n---\n"
+                      entry = f"{entry_prefix}\nImage: {file_name} [Data Sent]\nResponse:\n{img_response}\n---\n" # Placeholder for image data
                       history_list = history.add_to_history(history_list, entry); current_session_history.append(entry); processed_files += 1
+
                  except Exception as e:
-                      # Ensure file_name is defined here because it's part of the loop var
                       error_msg = f"Error processing file '{file_name}': {e}"
                       print(f"  {error_msg}")
                       confirmation_messages.append(f"  - {file_name}: Error - {e}")
                       error_entry = f"Timestamp: {timestamp}\nRole: {actual_role_name}\nModel: {model_name}\nInput: {user_input}\nImage: {file_name}\nERROR: {e}\n---\n"
                       history_list = history.add_to_history(history_list, error_entry); current_session_history.append(error_entry)
+                 finally:
+                      if loop_img:
+                          try: loop_img.close()
+                          except Exception as e_close: print(f"  Warning: Error closing loop image {file_name}: {e_close}")
 
              if processed_files == 0: final_response = "No valid image files found or processed in the directory."
              else: final_response = f"Folder processing complete ({processed_files} files):\n" + "\n".join(confirmation_messages)
+
+    elif single_image_input is None and (not folder_path or not os.path.isdir(folder_path)):
+        # Text-Only Call (No image passed)
+         print(f"Calling agent (Text Only): model={model_name}, role={actual_role_name}")
+         final_response = get_llm_response(
+             role=actual_role_name, prompt=prompt, model=model_name, settings=current_settings,
+             roles_data=roles_data_current, images=None, max_tokens=effective_max_tokens, # Pass images=None
+             ollama_api_options=agent_ollama_options
+         )
+         entry = f"{entry_prefix}\nImage: {image_source_info}\nResponse:\n{final_response}\n---\n"
+         history_list = history.add_to_history(history_list, entry)
+         current_session_history.append(entry)
+
 
     # Return response text, session history text, model name, and updated session list
     return final_response, "\n---\n".join(current_session_history), model_name, current_session_history
@@ -336,13 +400,11 @@ def chat_logic(
 
 # --- Comment Logic ---
 def comment_logic(
-    # UI Inputs
     llm_response_text, comment, max_tokens_ui,
     use_ollama_api_options,
-    # State Inputs
     model_state_value, current_settings, file_agents_dict,
     history_list_state, session_history_list_state
-    ) -> tuple[str, str, list]: # Return type hint
+    ) -> tuple[str, str, list]:
     """Handles the commenting logic."""
     history_list = list(history_list_state)
     current_session_history = list(session_history_list_state)
@@ -378,8 +440,6 @@ def comment_logic(
 
 def update_max_tokens_on_limiter_change(limiter_choice, current_max_tokens_value):
     """Updates the max token slider value based on limiter selection."""
-    # Use load_json directly here as limiters_data_state might not be passed
-    # Consider passing limiters_data_state if strict state passing is desired
     current_limiters_data = load_json(LIMITERS_FILE, is_relative=True)
     if limiter_choice == "Off": return gr.update()
 
@@ -388,11 +448,17 @@ def update_max_tokens_on_limiter_change(limiter_choice, current_max_tokens_value
     if limiter_token_val is not None:
          try:
              limiter_token_int = int(limiter_token_val)
-             current_max_tokens_int = int(float(current_max_tokens_value)) # Slider value might be float
+             # Slider value might be float, handle potential conversion errors
+             try:
+                 current_max_tokens_int = int(float(current_max_tokens_value))
+             except (ValueError, TypeError):
+                 print(f"Warning: Could not convert current max_tokens slider value '{current_max_tokens_value}' to int.")
+                 return gr.update() # Don't update if current value is invalid
+
              if limiter_token_int != current_max_tokens_int:
                   print(f"Limiter '{limiter_choice}' updating max_tokens slider to: {limiter_token_int}")
                   return gr.update(value=limiter_token_int)
-         except (ValueError, TypeError): print(f"Warning: Invalid numeric value for limiter/slider.")
+         except (ValueError, TypeError): print(f"Warning: Invalid numeric value for limiter token value '{limiter_token_val}'.")
     return gr.update()
 
 
@@ -404,21 +470,8 @@ def clear_session_history_callback(session_history_list_state):
 
 
 # This callback's logic is now handled by the WRAPPER in app.py
-# It needs access to various states (settings, file_agents, teams)
-# Keep the definition here for reference, but app.py calls the wrapper.
-def update_role_dropdown_callback(use_default, use_custom, file_agents_dict, teams_data_state, current_settings_dict):
-    """Core logic to calculate updated choices for agent/team dropdown."""
-    print("Core logic: Calculating role/team dropdown choices...")
-    current_settings_dict["using_default_agents"] = use_default
-    current_settings_dict["using_custom_agents"] = use_custom
-    combined_roles = load_all_roles(current_settings_dict, file_agents=file_agents_dict)
-    file_agent_keys = list(file_agents_dict.keys()) if file_agents_dict else []
-    role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
-    team_display_choices = sorted([f"[Team] {name}" for name in teams_data_state.keys()])
-    all_choices = ["(Direct Agent Call)"] + team_display_choices + role_display_choices
-    new_value = all_choices[0] if all_choices else None
-    print(f" Core Logic: Role/Team choices calculated: {len(all_choices)} total")
-    return gr.Dropdown.update(choices=all_choices, value=new_value)
+# def update_role_dropdown_callback(use_default, use_custom, file_agents_dict, teams_data_state, current_settings_dict):
+#     pass
 
 
 def handle_agent_file_upload(uploaded_file):
@@ -427,7 +480,7 @@ def handle_agent_file_upload(uploaded_file):
         print("Agent file upload cleared.")
         # Needs to return 3 values matching outputs list in app.py upload handler
         # The third value signals Gradio to run the .then() chain
-        return {}, None, gr.Dropdown.update()
+        return {}, None, gr.update()
 
     try:
         file_path = uploaded_file.name; file_basename = os.path.basename(file_path)
@@ -444,6 +497,7 @@ def handle_agent_file_upload(uploaded_file):
         if not valid_agents: raise ValueError("No valid agent definitions found.")
         print(f"Successfully loaded {len(valid_agents)} agent(s) from {file_basename}.")
         # Return loaded dict, base filename, and trigger dropdown update via .then()
+        # IMPORTANT: Return the update object directly
         return valid_agents, file_basename, gr.Dropdown.update()
     except (json.JSONDecodeError, ValueError) as e: error_msg = f"Invalid Agent File: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
     except Exception as e: error_msg = f"Error processing agent file: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
@@ -632,6 +686,7 @@ def remove_step_from_editor(step_index_to_remove, current_editor_state):
     return editor_state, editor_state["steps"]
 
 
+# --- save_team_from_editor: Adjustments needed to return 5 outputs ---
 def save_team_from_editor(
     # Current editor UI values
     team_name_in, description_in, assembly_strategy_in,
@@ -640,19 +695,19 @@ def save_team_from_editor(
     all_teams_data_state,
     current_settings_state, # Needed for reloading roles for dropdown update
     file_agents_dict_state  # Needed for reloading roles for dropdown update
-    ):
-    """Saves the team currently defined in the editor fields."""
+    ) -> tuple[dict, dict, dict, dict, str]: # Added return type hint matching 5 outputs
+    """Saves the team currently defined in the editor fields. Returns 5 values."""
     print("Attempting to save team...")
     team_name = team_name_in.strip()
-    # Define default outputs
-    default_outputs = [all_teams_data_state, gr.update(), gr.update(), "Save failed."]
+    # Define default outputs for 5 return values
+    default_outputs = [all_teams_data_state, gr.update(), gr.update(), gr.update(), "Save failed."]
 
-    if not team_name: msg = "Team Name cannot be empty."; print(msg); gr.Error(msg); return default_outputs[0:3] + [msg]
+    if not team_name: msg = "Team Name cannot be empty."; print(msg); gr.Error(msg); return default_outputs[0:4] + [msg]
 
     steps = current_editor_state.get("steps", [])
     if not steps: msg = f"Save Warning: Team '{team_name}' has no steps."; print(msg); gr.Warning(msg) # Allow save
 
-    all_teams_data = all_teams_data_state.copy() if all_teams_data_state else {}
+    all_teams_data = all_teams_data_state.copy() if isinstance(all_teams_data_state, dict) else {}
     team_data = {"description": description_in.strip(), "steps": steps, "assembly_strategy": assembly_strategy_in}
     all_teams_data[team_name] = team_data # Add or overwrite
 
@@ -665,28 +720,42 @@ def save_team_from_editor(
         role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
         new_team_choices = sorted(list(all_teams_data.keys()))
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
-        # Outputs: teams_data_state, editor_team_dropdown, chat_role_dropdown, status_textbox
-        return all_teams_data, gr.Dropdown.update(choices=new_team_choices, value=team_name), gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"), msg
+        # Outputs: teams_data_state, editor_team_dd, chat_role_dd, caption_agent_dd, status_textbox # FIXED
+        return (
+            all_teams_data,
+            gr.Dropdown.update(choices=new_team_choices, value=team_name),
+            gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
+            gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"), # Update caption DD too
+            msg
+        )
     else:
         msg = f"Error: Failed to save team data."; print(msg); gr.Error(msg)
-        return default_outputs[0:3] + [msg] # Return original state, update status
+        return default_outputs[0:4] + [msg] # Return original state, update status
 
-
+# --- delete_team_logic: Adjustments needed to return 10 outputs ---
 def delete_team_logic(
     team_name_to_delete,
     all_teams_data_state,
     current_settings_state, # Needed for reloading roles for dropdown update
     file_agents_dict_state  # Needed for reloading roles for dropdown update
-    ):
-    """Deletes the selected team."""
+    ) -> tuple[dict, dict, dict, dict, str, str, str, list, str, dict]: # Added return type hint matching 10 outputs
+    """Deletes the selected team. Returns 10 values."""
     print(f"Attempting to delete team: '{team_name_to_delete}'")
-    # Define default clear values and no-change outputs
+    # Define default clear values and no-change outputs for 10 returns
     clear_name, clear_desc, clear_steps, clear_strat, clear_state = clear_team_editor()
-    no_change_outputs = [all_teams_data_state, gr.update(), gr.update(), "Delete failed.", clear_name, clear_desc, clear_steps, clear_strat, clear_state]
+    no_change_outputs = [
+        all_teams_data_state, gr.update(), gr.update(), gr.update(), # States/DDs
+        "Delete failed.", # Status
+        clear_name, clear_desc, clear_steps, clear_strat, clear_state # Clear outputs
+    ]
 
-    if not team_name_to_delete: msg = "No team selected."; print(msg); gr.Warning(msg); return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
-    all_teams_data = all_teams_data_state.copy() if all_teams_data_state else {}
-    if team_name_to_delete not in all_teams_data: msg = f"Team '{team_name_to_delete}' not found."; print(msg); gr.Warning(msg); return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
+    if not team_name_to_delete:
+        msg = "No team selected."; print(msg); gr.Warning(msg)
+        return no_change_outputs[0:4] + [msg] + no_change_outputs[5:]
+    all_teams_data = all_teams_data_state.copy() if isinstance(all_teams_data_state, dict) else {}
+    if team_name_to_delete not in all_teams_data:
+        msg = f"Team '{team_name_to_delete}' not found."; print(msg); gr.Warning(msg)
+        return no_change_outputs[0:4] + [msg] + no_change_outputs[5:]
 
     del all_teams_data[team_name_to_delete]
 
@@ -699,58 +768,19 @@ def delete_team_logic(
         role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
         new_team_choices = sorted(list(all_teams_data.keys()))
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
-        # Return updates: teams_state, editor_dd, chat_dd, status_msg, + clear outputs
-        return all_teams_data, gr.Dropdown.update(choices=new_team_choices, value=None), gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"), msg, clear_name, clear_desc, clear_steps, clear_strat, clear_state
+        # Return updates: teams_state, editor_dd, chat_dd, caption_dd, status_msg, + clear outputs # FIXED
+        return (
+            all_teams_data,
+            gr.Dropdown.update(choices=new_team_choices, value=None),
+            gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"),
+            gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"), # Update caption DD too
+            msg,
+            clear_name, clear_desc, clear_steps, clear_strat, clear_state
+        )
     else:
         msg = f"Error: Failed to save teams after deletion."; print(msg); gr.Error(msg)
         # Don't update state/dropdowns if save failed, just status and editor clear
-        return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
-
-
-# --- Captioning Callbacks ---
-# (Keep existing captioning callbacks here, including update_caption_display etc.)
-def update_caption_display(
-    selected_items: list | str | None, # Input from CheckboxGroup/Selector
-    caption_data_dict: dict,         # Input from caption_data_state
-    image_paths_dict: dict           # Input from image_paths_state
-    ) -> tuple[str, str | None, str | None, str | None]: # Return 4 values
-    """
-    Retrieves caption text AND image path for the selected image filename.
-    Handles input potentially being a list from CheckboxGroup.
-
-    Returns:
-        tuple: (caption_text, selected_filename_state, selected_filename_display, image_path_for_preview)
-    """
-    selected_filename = None
-    # Handle list input from CheckboxGroup
-    if isinstance(selected_items, list):
-        selected_filename = selected_items[0] if selected_items else None
-        if selected_items and len(selected_items) > 1:
-             print(f"Info: Multiple images selected ({len(selected_items)}), displaying data for first: {selected_filename}")
-    elif isinstance(selected_items, str):
-         selected_filename = selected_items # Handle single string if needed
-
-    image_path_for_preview = None
-    caption_text = ""
-    filename_display = selected_filename # Default display name
-
-    if not selected_filename or not isinstance(caption_data_dict, dict) or not isinstance(image_paths_dict, dict):
-        print("Update caption display: No valid selection or required data dictionaries missing.")
-        # Return 4 values for clearing outputs
-        return "", None, None, None
-    else:
-        # Use .get() for safer dictionary access
-        caption_text = caption_data_dict.get(selected_filename, f"Caption data not found for '{selected_filename}'.")
-        image_path_for_preview = image_paths_dict.get(selected_filename) # Get full path using the key
-        if not image_path_for_preview or not os.path.isfile(image_path_for_preview):
-             print(f"Warning: Image path not found or invalid for selected file: {selected_filename}")
-             filename_display = f"{selected_filename} (Image Path Error)" # Indicate error
-             image_path_for_preview = None # Don't try to show preview if path is bad
-
-        print(f"Displaying caption and preview for: {selected_filename}")
-
-    # Outputs: caption_display, selected_item_state, selected_filename_display, image_preview
-    return caption_text, selected_filename, filename_display, image_path_for_preview
+        return no_change_outputs[0:4] + [msg] + no_change_outputs[5:]
 
 
 # --- History Callbacks ---
