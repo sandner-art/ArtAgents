@@ -1,8 +1,6 @@
-# ArtAgents: Agent-Based Creative Workflow Tool
+# ArtAgents: Agent-Based Creative Tool
 
 ArtAgents is a framework designed for artists, designers, and creators to experiment with LLM-based prompt engineering and creative content generation, especially focused on visual concepts. It leverages Ollama for local model serving, allowing users to interact with various text and multimodal models through specialized AI 'agents', configurable multi-agent "Teams" (workflows), and includes tools for managing image captions.
-
-[![artagents-github](https://github.com/user-attachments/assets/9350bb3a-9e19-4818-b109-983c5a6b0bb1)]() <!-- Consider updating screenshot to show new tabs -->
 
 ## Overview
 
@@ -101,20 +99,6 @@ ArtAgent/
 ├── .gitignore              # Should include venv/, __pycache__/, sweep_runs/ etc.
 └── README.md               # This file
 ```
-
-## Installation & Setup
-
-1.  **Install Ollama:** Get from [ollama.com](https://ollama.com/) and ensure `ollama` command works.
-2.  **Clone Repository:** `git clone <your-repository-url>` & `cd ArtAgent`.
-3.  **(Recommended) Setup Venv:** Run `.\scripts\setupvenv.bat` (Windows) or equivalent. Installs dependencies from `requirements.txt`.
-4.  **Setup Ollama Models:** Run `.\scripts\setup.bat` (Windows) or equivalent to check Ollama and optionally pull recommended models (or use `ollama pull <model_name>` manually). See `models.json`.
-5.  **Configure (Optional):** Edit `settings.json`, `models.json`, `agent_teams.json`, etc.
-
-## Running the Application
-
-1.  **Start Ollama Service:** Ensure Ollama is running (`ollama serve` or Desktop App).
-2.  **Run ArtAgents:** Use `.\scripts\govenv.bat` (if using venv) or `.\scripts\go.bat` (Windows), or equivalent `.sh` scripts.
-3.  **Access UI:** Open the local URL (usually `http://127.0.0.1:7860`) in your browser.
 
 ## Development Status & Plan
 
