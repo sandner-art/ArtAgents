@@ -1,0 +1,33 @@
+{
+    "Detailed Object Design": {
+      "description": "Generates detailed prompts for objects. Style -> Form -> Details -> Refine.",
+      "manager_role": null,
+      "steps": [
+        {"role": "Styler", "goal": "Define overall style based on user input."},
+        {"role": "Designer", "goal": "Describe the primary shape and form."},
+        {"role": "Detailer", "goal": "Add specific details and materials."},
+        {"role": "Universal Prompter", "goal": "Combine steps into a concise prompt."}
+      ],
+      "assembly_strategy": "refine_last"
+    },
+    "Photorealistic Scene": {
+       "description": "Creates prompts for realistic scenes.",
+       "manager_role": null,
+       "steps": [
+          {"role": "Artist", "goal": "Establish core concept and mood."},
+          {"role": "Photographer", "goal": "Define composition, lighting, camera details."},
+          {"role": "Detailer", "goal": "Add fine details to elements in the scene."},
+          {"role": "Universal Prompter", "goal": "Combine steps into a coherent scene prompt."}
+       ],
+       "assembly_strategy": "refine_last"
+    },
+    "Minimal Concatenate Test": {
+       "description": "Simple workflow just combining two steps.",
+       "manager_role": null,
+       "steps": [
+           {"role": "Concise Describer"},
+           {"role": "Detailer"}
+       ],
+       "assembly_strategy": "concatenate"
+    }
+  }
