@@ -44,6 +44,7 @@ from ui.roles_tab import create_roles_tabs
 from ui.history_tab import create_history_tab
 from ui.common_ui_elements import create_footer
 from ui.captions_tab import create_captions_tab # Import new UI tab
+
 from core.captioning_logic import ( # Import captioning logic functions
     load_images_and_captions,
     update_caption_display,
@@ -95,6 +96,9 @@ teams_data = load_agent_teams() # Load teams
 
 # Generate initial lists for UI dropdowns
 model_names_with_vision = [f"{m['name']} (VISION)" if m.get('vision') else m.get('name', 'Unknown') for m in models_data] if models_data else []
+# --- NEW: Create list specifically for vision models ---
+vision_model_names = [f"{m['name']} (VISION)" for m in models_data if m.get('vision')] if models_data else []
+# --- End New List ---
 limiters_names = list(limiters_data.keys())
 profile_names = list(profiles_data.keys())
 team_names = list(teams_data.keys())
@@ -161,9 +165,10 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          load_json(CUSTOM_ROLES_FILE, is_relative=True)
     )
     history_comps = create_history_tab(history_list)
-    # Create the Captions tab instance, passing initial choices # <--- FIXED ---
+    # --- Pass vision models list to captions tab ---
     caption_comps = create_captions_tab(
-        initial_agent_team_choices=initial_agent_team_choices
+        initial_agent_team_choices=initial_agent_team_choices,
+        initial_vision_models=vision_model_names # Pass the new list
     )
 
     create_footer()
@@ -581,30 +586,30 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         ]
     )
 
-    # --- NEW: Wire Generate Caption Buttons ---
+    # --- Update Generate Caption Button Wiring ---
     # Generate for Selected
     caption_comps['caption_generate_selected_button'].click(
         fn=generate_captions_for_selected, # Function to be created in captioning_logic.py
         inputs=[ # Inputs needed by the generation logic
             caption_comps['captions_image_selector'], # Selected image filenames (list)
-            caption_comps['caption_agent_selector'], # Selected Agent/Team name
-            caption_comps['caption_generate_mode'], # Overwrite/Skip/etc.
-            caption_image_paths_state,      # State: filename -> path
-            caption_data_state,             # State: filename -> caption (to potentially update)
-            settings_state,                 # State: App settings (for Ollama URL, options)
-            models_data_state,              # State: Available models
-            limiters_data_state,            # State: Limiters
-            teams_data_state,               # State: Team definitions
-            chat_comps['loaded_file_agents_state'], # State: File agents
-            history_list_state,             # State: Persistent history (for logging)
-            session_history_state,          # State: Session history (for logging/display)
+            caption_comps['caption_agent_selector'],  # Selected Agent/Team name
+            caption_comps['caption_model_selector'],  # <<< NEW: Pass selected model name
+            caption_comps['caption_generate_mode'],   # Overwrite/Skip/etc.
+            caption_image_paths_state,
+            caption_data_state,
+            settings_state,
+            models_data_state,
+            limiters_data_state,
+            teams_data_state,
+            chat_comps['loaded_file_agents_state'],
+            history_list_state,
+            session_history_state,
         ],
-        outputs=[ # Outputs to update
-            caption_comps['captions_status_display'], # Display status messages
-            caption_data_state,                       # Update caption state if captions changed
-            # Optionally update the caption display if only one image was selected and processed
-            caption_comps['captions_caption_display'], # Update display with generated caption
-            session_history_state # Pass back updated session history list
+        outputs=[ # Outputs remain the same for now
+            caption_comps['captions_status_display'],
+            caption_data_state,
+            caption_comps['captions_caption_display'],
+            session_history_state
         ]
     )
 
@@ -612,26 +617,27 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     caption_comps['caption_generate_all_button'].click(
         fn=generate_captions_for_all, # Function to be created in captioning_logic.py
         inputs=[ # Inputs needed by the generation logic
-            caption_image_paths_state,      # State: filename -> path (all loaded images)
-            caption_data_state,             # State: filename -> caption (all loaded captions)
+            caption_image_paths_state,
+            caption_data_state,
             caption_comps['caption_agent_selector'], # Selected Agent/Team name
-            caption_comps['caption_generate_mode'], # Overwrite/Skip/etc.
-            settings_state,                 # State: App settings
-            models_data_state,              # State: Available models
-            limiters_data_state,            # State: Limiters
-            teams_data_state,               # State: Team definitions
-            chat_comps['loaded_file_agents_state'], # State: File agents
-            history_list_state,             # State: Persistent history
-            session_history_state,          # State: Session history
+            caption_comps['caption_model_selector'], # <<< NEW: Pass selected model name
+            caption_comps['caption_generate_mode'],  # Overwrite/Skip/etc.
+            settings_state,
+            models_data_state,
+            limiters_data_state,
+            teams_data_state,
+            chat_comps['loaded_file_agents_state'],
+            history_list_state,
+            session_history_state,
         ],
-        outputs=[ # Outputs to update
-            caption_comps['captions_status_display'], # Display status messages
-            caption_data_state,                       # Update caption state with all generated captions
-            # Update caption display with the caption of the *last* processed image in the batch
+        outputs=[ # Outputs remain the same for now
+            caption_comps['captions_status_display'],
+            caption_data_state,
             caption_comps['captions_caption_display'],
-            session_history_state # Pass back updated session history list
+            session_history_state
         ]
     )
+
 
 # --- atexit handler ---
 def on_exit():

@@ -1,18 +1,18 @@
 # ArtAgent/core/captioning_logic.py
 import os
-import gradio as gr # Only needed if using gr.update directly, which we avoid here
+import gradio as gr
 from PIL import Image # Keep PIL needed for checking image files
-from .utils import get_absolute_path, load_json # Assuming load_json might be needed if captions are complex
-# --- NEW: Import dependencies needed for agent calls ---
 import time
+import numpy as np # Import numpy if conversion is needed
+
+# Import utilities and core components
+from .utils import get_absolute_path, load_json
 from .app_logic import execute_chat_or_team # Import the router function
 from . import history_manager as history # For logging
 
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
 
-# --- (Existing functions: load_images_and_captions, update_caption_display, save_caption, batch_edit_captions) ---
-# ... Keep existing functions here ...
-
+# --- Existing functions: load_images_and_captions, update_caption_display, save_caption, batch_edit_captions ---
 def load_images_and_captions(folder_path: str):
     """
     Loads image filenames and their corresponding caption file contents from a folder.
@@ -250,12 +250,14 @@ def batch_edit_captions(
     # Return status and the fully updated captions dictionary
     return status, updated_captions
 
-# --- NEW Placeholder Functions for Agent Caption Generation ---
+# --- NEW Functions for Agent Caption Generation ---
 
+# CORRECTED Signature: Added selected_model_display_name
 def generate_captions_for_selected(
     selected_filenames: list | None,
     agent_or_team_display_name: str,
-    generate_mode: str,
+    selected_model_display_name: str, # <<< ADDED
+    generate_mode: str, # Overwrite, Skip, Append, Prepend
     image_paths: dict,
     current_captions: dict,
     settings: dict,
@@ -267,64 +269,180 @@ def generate_captions_for_selected(
     session_history: list
     ) -> tuple[str, dict, str, list]:
     """
-    Placeholder: Generates captions for selected images using an agent/team.
+    Generates captions for selected images using an agent/team and a specified model.
 
     Returns:
         tuple: (status_message, updated_captions_dict, last_caption_generated, updated_session_history)
     """
-    print("\n--- Received Request: Generate Captions for Selected ---")
-    print(f"  Selected Files: {selected_filenames}")
-    print(f"  Agent/Team: {agent_or_team_display_name}")
-    print(f"  Mode: {generate_mode}")
+    print("\n--- Running: Generate Captions for Selected ---")
+    start_time = time.time()
 
     if not selected_filenames:
         return "No images selected to generate captions for.", current_captions, "", session_history
+    if not agent_or_team_display_name or agent_or_team_display_name == "(Direct Agent Call)":
+         return "Please select a valid Agent or Team for captioning.", current_captions, "", session_history
+    # --- ADDED: Check if a vision model was actually selected ---
+    if not selected_model_display_name:
+         return "Please select a Vision Model for captioning.", current_captions, "", session_history
+    # --- End Added Check ---
 
-    # Basic check for vision model requirement (can be refined)
-    is_vision_agent = "(VISION)" in agent_or_team_display_name or "[Team]" in agent_or_team_display_name
-    # More robust check would involve looking up the actual agent/team and base model
-    if not is_vision_agent: # Simple placeholder check
-         # Check if the selected agent likely supports vision
-         # This is simplistic; real check might involve looking up model in models.json
-         # based on agent/team config or assuming specific agents like 'Llava' are vision-capable.
-         pass # Allow non-vision agents for now, they might just use filename/context
-         # A better check might look up the selected agent/team's underlying model
-         # return f"Error: Selected agent/team '{agent_or_team_display_name}' might not support vision.", current_captions, "", session_history
+    # --- Vision Capability Check (Simplified - relies on model being passed now) ---
+    is_likely_vision_agent = (
+        any(tag in agent_or_team_display_name.lower() for tag in ['llava', 'vision', 'photographer', 'captioner']) or # Added more keywords
+        agent_or_team_display_name.startswith("[Team]")
+    )
+    if not is_likely_vision_agent:
+        print(f"Warning: Agent/Team '{agent_or_team_display_name}' selected, but ensure the chosen model '{selected_model_display_name}' is appropriate for image captioning.")
 
-
-    status = f"Caption generation for {len(selected_filenames)} selected images started...\n(NOT YET IMPLEMENTED)"
+    status_messages = []
     updated_captions = current_captions.copy()
-    last_caption = ""
+    processed_count = 0
+    error_count = 0
+    skipped_count = 0
+    last_caption_generated = "" # Store the last successful one for display
 
-    # --- TODO: Implement Loop ---
-    # 1. Iterate through selected_filenames
-    # 2. For each filename:
-    #    a. Check if file exists based on image_paths[filename]
-    #    b. Check generate_mode (Overwrite, Skip etc.) against existing text file
-    #    c. Load image using PIL: `img = Image.open(image_paths[filename])`
-    #    d. Construct prompt (e.g., "Describe this image.")
-    #    e. Call execute_chat_or_team:
-    #       response, _, model_name_used, session_history = execute_chat_or_team(...)
-    #       Pass the loaded image object in a list: `single_image_pil=[img]` (or appropriate arg name)
-    #       Pass necessary state data (settings, models, teams, etc.)
-    #       Pass agent_or_team_display_name
-    #       Pass a dummy user_input="" or a fixed prompt like "Describe the image."
-    #       Use reasonable max_tokens, file handling ('None'), limiter ('Off'), etc.
-    #    f. Process the `response` (clean up, etc.) -> generated_caption
-    #    g. Save the generated_caption to the corresponding .txt file based on generate_mode
-    #    h. Update updated_captions[filename] = generated_caption
-    #    i. Update status message string
-    #    j. Store the last generated caption
+    current_session_history = list(session_history)
+    fixed_prompt = "Describe this image concisely. Focus on the main subject, action, and setting. Do not add commentary."
 
-    # Placeholder return matching the output signature in app.py
-    # outputs=[status_display, caption_data_state, caption_display, session_history_state]
-    return status, updated_captions, last_caption, session_history
+    for filename in selected_filenames:
+        print(f"  Processing: {filename}")
+        image_path = image_paths.get(filename)
+        if not image_path or not os.path.isfile(image_path):
+            msg = f"- Skipped {filename}: Image path not found or invalid."
+            print(f"    {msg}")
+            status_messages.append(msg)
+            skipped_count += 1
+            continue
+
+        base_name = os.path.splitext(filename)[0]
+        text_filename = base_name + ".txt"
+        text_path = os.path.join(os.path.dirname(image_path), text_filename)
+        caption_exists = os.path.exists(text_path)
+        original_caption = updated_captions.get(filename, "")
+
+        if caption_exists and generate_mode == "Skip":
+            msg = f"- Skipped {filename}: Caption file '{text_filename}' already exists and mode is Skip."
+            print(f"    {msg}")
+            status_messages.append(msg)
+            skipped_count += 1
+            continue
+
+        img = None # Initialize img variable
+        try:
+            img = Image.open(image_path)
+            # Optional: Convert image if needed
+            # if img.mode == 'RGBA' or img.mode == 'P':
+            #      img = img.convert('RGB')
+            #      print(f"    Converted image {filename} to RGB mode.")
+
+            print(f"    Calling agent/team '{agent_or_team_display_name}' with model '{selected_model_display_name}' for {filename}...")
+
+            # --- PASS selected_model_display_name to execute_chat_or_team ---
+            # Note: The execute_chat_or_team -> chat_logic path expects `single_image_np`.
+            # However, the underlying ollama_agent expects PIL. We pass PIL here.
+            # If this causes issues, chat_logic might need adjustment to accept PIL
+            # or we convert to numpy here: img_np = np.array(img)
+            response_text, _, _, updated_session_history_list = execute_chat_or_team(
+                folder_path=None,
+                user_input=fixed_prompt,
+                model_with_vision=selected_model_display_name, # <<< USE THE SELECTED MODEL
+                max_tokens_ui=150, # Reasonable limit for captions
+                file_handling_option="Skip", # Not used for single image calls within the loop
+                limiter_handling_option="Off", # Agent/Team style applies
+                single_image_np=img, # <<< Pass PIL Image (needs testing with router)
+                use_ollama_api_options=True, # Apply agent/team specific options
+                release_model_on_change=False, # Avoid unloading during loop
+                selected_role_or_team=agent_or_team_display_name,
+                # Pass necessary states
+                current_settings=settings,
+                models_data_state=models_data,
+                limiters_data_state=limiters_data,
+                teams_data_state=teams_data,
+                selected_model_tracker_value=None, # Not needed for this call
+                file_agents_dict=file_agents,
+                history_list_state=history_list, # For persistent logging within execute_...
+                session_history_list_state=current_session_history # Pass current session list
+            )
+            current_session_history = updated_session_history_list # Update session history
+
+            # Check for errors returned by the agent/team execution
+            if response_text is None or isinstance(response_text, str) and (response_text.startswith("Error:") or response_text.startswith("⚠️ Error:")):
+                 raise ValueError(f"Agent/Team returned an error: {response_text}")
+
+            generated_caption = response_text.strip() if isinstance(response_text, str) else "Error: Invalid response type"
+            if not generated_caption or generated_caption.startswith("Error:"): # Double check after strip
+                 raise ValueError(f"Agent/Team returned empty or error response: '{generated_caption}'")
+
+            last_caption_generated = generated_caption
+            print(f"    Generated Caption: {generated_caption[:100]}...")
+
+            # --- Save Generated Caption ---
+            action_taken = ""
+            final_caption_to_write = generated_caption
+
+            # Handle Append/Prepend modes
+            if generate_mode == "Append":
+                # Append only if there was original content
+                final_caption_to_write = f"{original_caption}\n\n---\n\n{generated_caption}" if original_caption else generated_caption
+                action_taken = "Appended" if caption_exists else "Written" # Adjust action based on original existence
+            elif generate_mode == "Prepend":
+                 # Prepend only if there was original content
+                final_caption_to_write = f"{generated_caption}\n\n---\n\n{original_caption}" if original_caption else generated_caption
+                action_taken = "Prepended" if caption_exists else "Written" # Adjust action based on original existence
+            elif caption_exists and generate_mode == "Overwrite":
+                action_taken = "Overwritten"
+            elif not caption_exists: # Handles Overwrite mode when file doesn't exist
+                 action_taken = "Written"
+            else: # Should not happen if Skip was handled correctly
+                 action_taken = "Error: Logic flaw in save mode"
+
+            # Perform the save
+            try:
+                with open(text_path, 'w', encoding='utf-8') as f:
+                    f.write(final_caption_to_write)
+                updated_captions[filename] = final_caption_to_write # Update state dict
+                msg = f"- Success {filename}: Caption generated and file {action_taken}."
+                print(f"    {msg}")
+                status_messages.append(msg)
+                processed_count += 1
+            except Exception as e_save:
+                 msg = f"- Error saving caption for {filename} ({text_filename}): {e_save}"
+                 print(f"    {msg}")
+                 status_messages.append(msg)
+                 error_count += 1 # Count save error
+
+        except Exception as e_gen:
+            # Catch errors from Image.open or the agent/team call
+            msg = f"- Error processing {filename}: {e_gen}"
+            print(f"    {msg}")
+            status_messages.append(msg)
+            error_count += 1
+        finally:
+             # Ensure image file is closed if it was opened
+             if img:
+                 try:
+                     img.close()
+                 except Exception as e_close:
+                     print(f"    Warning: Error closing image file {filename}: {e_close}")
 
 
+    end_time = time.time()
+    duration = end_time - start_time
+    final_status = (f"Caption generation finished in {duration:.2f}s. "
+                    f"Processed: {processed_count}, Errors: {error_count}, Skipped: {skipped_count}.\n"
+                    + "\n".join(status_messages))
+    print(final_status)
+
+    # Return: status_message, updated_captions_dict, last_caption_generated, updated_session_history
+    return final_status, updated_captions, last_caption_generated, current_session_history
+
+
+# CORRECTED Signature: Added selected_model_display_name
 def generate_captions_for_all(
     image_paths: dict,
     current_captions: dict,
     agent_or_team_display_name: str,
+    selected_model_display_name: str, # <<< ADDED
     generate_mode: str,
     settings: dict,
     models_data: list,
@@ -335,37 +453,47 @@ def generate_captions_for_all(
     session_history: list
     ) -> tuple[str, dict, str, list]:
     """
-    Placeholder: Generates captions for ALL loaded images using an agent/team.
+    Generates captions for ALL loaded images using an agent/team by calling
+    the generate_captions_for_selected logic repeatedly.
 
     Returns:
         tuple: (status_message, updated_captions_dict, last_caption_generated, updated_session_history)
     """
-    print("\n--- Received Request: Generate Captions for ALL ---")
-    print(f"  Agent/Team: {agent_or_team_display_name}")
-    print(f"  Mode: {generate_mode}")
+    print("\n--- Running: Generate Captions for ALL ---")
+    start_time = time.time()
 
     if not image_paths:
         return "No images loaded to generate captions for.", current_captions, "", session_history
 
-    all_filenames = list(image_paths.keys())
-    status = f"Batch caption generation for {len(all_filenames)} images started...\n(NOT YET IMPLEMENTED)"
-    updated_captions = current_captions.copy()
-    last_caption = ""
+    all_filenames = sorted(list(image_paths.keys())) # Process in defined order
 
-    # --- TODO: Implement Loop (similar to generate_captions_for_selected) ---
-    # Iterate through all_filenames instead of selected_filenames
+    # --- ADDED: Check if a vision model was actually selected ---
+    if not selected_model_display_name:
+         return "Please select a Vision Model for captioning.", current_captions, "", session_history
+    # --- End Added Check ---
 
-    # Placeholder return matching the output signature in app.py
-    # outputs=[status_display, caption_data_state, caption_display, session_history_state]
-    return status, updated_captions, last_caption, session_history
+    # Reuse the core logic by calling it for the list of all files
+    # Pass the selected_model_display_name through
+    final_status, updated_captions, last_caption, updated_session_history = generate_captions_for_selected(
+         selected_filenames=all_filenames,
+         agent_or_team_display_name=agent_or_team_display_name,
+         selected_model_display_name=selected_model_display_name, # <<< Pass model name
+         generate_mode=generate_mode,
+         image_paths=image_paths,
+         current_captions=current_captions,
+         settings=settings,
+         models_data=models_data,
+         limiters_data=limiters_data,
+         teams_data=teams_data,
+         file_agents=file_agents,
+         history_list=history_list,
+         session_history=session_history
+    )
 
+    end_time = time.time()
+    print(f"Batch generation finished in {end_time - start_time:.2f}s.")
 
-# --- Original Placeholder ---
-# Kept for reference, but replaced by the above
-# def generate_caption_with_agent(*args, **kwargs):
-#     print("Agent caption generation not yet implemented.")
-#     return "Agent caption generation is not yet available.", {}, {}, {} # Match expected outputs placeholder
+    # Modify the status slightly to indicate it was a batch run
+    final_status = f"Batch Run Summary:\n{final_status}"
 
-# def batch_generate_captions(*args, **kwargs):
-#     print("Batch agent caption generation not yet implemented.")
-#     return "Batch agent caption generation is not yet available."
+    return final_status, updated_captions, last_caption, updated_session_history
