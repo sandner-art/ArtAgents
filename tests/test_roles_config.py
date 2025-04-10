@@ -4,9 +4,11 @@ import pytest
 import os
 import json
 import sys
+from unittest.mock import patch
 
 # --- Adjust import path ---
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(test_dir)
 sys.path.insert(0, project_root)
 
 try:
@@ -59,28 +61,33 @@ def temp_roles_files(tmp_path):
 
 @pytest.fixture(autouse=True)
 def mock_roles_file_paths(monkeypatch, temp_roles_files):
-    """Mocks the file path constants to use temporary files."""
+    """Mocks the file path constants and load_json to use temporary files."""
     default_file, custom_file = temp_roles_files
+    # Mock the constants used within the roles_config module
     monkeypatch.setattr('agents.roles_config.DEFAULT_ROLES_FILE', str(default_file))
     monkeypatch.setattr('agents.roles_config.CUSTOM_ROLES_FILE', str(custom_file))
-    # IMPORTANT: Also patch the paths used internally by load_json if roles_config calls it
-    # Since load_json resolves relative paths using utils.PROJECT_ROOT, we need to ensure
-    # the mocked paths are treated correctly. It's often easier to mock load_json itself
-    # *within the scope of the roles_config module* if path resolution becomes complex.
-    # Let's try mocking load_json used *by* roles_config:
 
-    original_load_json = load_json # Keep a reference
+    # Mock load_json used *by* roles_config to read from the temp files
+    original_load_json = load_json # Keep a reference if needed outside mock
 
     def mock_load_json_for_roles(file_path, is_relative=True):
-        # Only intercept calls for the specific mocked file paths
-        if file_path == str(default_file):
-             return json.loads(default_file.read_text(encoding='utf-8'))
-        elif file_path == str(custom_file):
-             return json.loads(custom_file.read_text(encoding='utf-8'))
+        # Use the mocked paths (which are absolute temp paths now)
+        path_to_check = file_path
+        # Load based on the mocked constants
+        if path_to_check == str(default_file):
+            if default_file.exists():
+                return json.loads(default_file.read_text(encoding='utf-8'))
+            else:
+                return {} # Simulate file not found
+        elif path_to_check == str(custom_file):
+            if custom_file.exists():
+                return json.loads(custom_file.read_text(encoding='utf-8'))
+            else:
+                return {} # Simulate file not found
         else:
-             # For any other path, use the original function (might be needed?)
-             # Or just return {} if roles_config shouldn't load anything else
-             return {} # Return empty dict for unexpected paths in this context
+             # Fallback for any other path if roles_config calls load_json unexpectedly
+             # print(f"Warning: Unexpected load_json call in roles_config test: {file_path}")
+             return {}
 
     monkeypatch.setattr('agents.roles_config.load_json', mock_load_json_for_roles)
 
@@ -156,24 +163,22 @@ def test_load_all_roles_with_file_agents_neither(temp_roles_files):
     assert "SharedRole" not in roles
     assert len(roles) == 2 # Only the file agents
 
-def test_load_all_roles_missing_files(monkeypatch, capsys):
-    """Test behavior when role files don't exist (should warn)."""
-    # Point to non-existent files
-    monkeypatch.setattr('agents.roles_config.DEFAULT_ROLES_FILE', "non_existent_default.json")
-    monkeypatch.setattr('agents.roles_config.CUSTOM_ROLES_FILE', "non_existent_custom.json")
-    # Mock load_json to simulate file not found (returns {})
-    monkeypatch.setattr('agents.roles_config.load_json', lambda file_path, is_relative=True: {})
+@patch('agents.roles_config.load_json') # Mock load_json directly here
+def test_load_all_roles_missing_files(mock_load_json_local, capsys):
+    """Test behavior when role files don't exist (load_json returns {})."""
+    # Make the mocked load_json return {} always for this test
+    mock_load_json_local.return_value = {}
 
     roles = load_all_roles(SETTINGS_BOTH) # Try loading both
     assert roles == {} # Expect empty dict
 
-    # Check if warnings were printed by the *underlying* load_json (which we mocked)
-    # or potentially by load_all_roles itself if it added checks.
-    # Let's assume load_json prints the warning based on core.utils implementation.
-    # We might need to adjust this assertion based on where the warning actually originates.
-    # The current load_all_roles doesn't explicitly warn for empty loads from files.
-    # captured = capsys.readouterr()
-    # assert "File not found" in captured.out or "File not found" in captured.err # Check if utils warns
+    # The function load_all_roles itself might print warnings now or in future
+    captured = capsys.readouterr()
+    # Check for specific warnings printed BY load_all_roles if they exist,
+    # otherwise, this test just verifies the empty dict return.
+    # Example potential warning check:
+    # assert "Warning: Failed to load or parse default roles" in captured.out
+
 
 # --- Tests for get_role_display_name ---
 

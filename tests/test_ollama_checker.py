@@ -7,7 +7,8 @@ import requests
 from unittest.mock import patch, MagicMock
 
 # --- Adjust import path ---
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(test_dir)
 sys.path.insert(0, project_root)
 
 try:

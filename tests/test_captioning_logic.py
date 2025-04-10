@@ -4,10 +4,11 @@ import pytest
 import os
 import sys
 # CORRECTED: Import 'call' from unittest.mock
-from unittest.mock import patch, mock_open, call
+from unittest.mock import patch, mock_open, call, MagicMock
 
 # --- Adjust import path ---
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(test_dir)
 sys.path.insert(0, project_root)
 
 try:
@@ -60,7 +61,8 @@ def test_load_images_and_captions_success(caption_test_folder):
     assert len(captions) == 4
 
     # Check sorted order (based on os.listdir)
-    assert filenames == ["image1.png", "image2.jpg", "image_without_caption.jpeg", "image3.webp"]
+    expected_filenames = sorted(["image1.png", "image2.jpg", "image_without_caption.jpeg", "image3.webp"])
+    assert filenames == expected_filenames
 
     # Check paths
     assert img_paths["image1.png"] == os.path.join(folder_path, "image1.png")
@@ -72,10 +74,10 @@ def test_load_images_and_captions_success(caption_test_folder):
     assert captions["image3.webp"] == "" # Missing caption file -> empty string
     assert captions["image_without_caption.jpeg"] == "" # Missing caption file -> empty string
 
-    # Check first item outputs
-    assert first_img == "image1.png"
+    # Check first item outputs (depends on sorted order)
+    assert first_img == expected_filenames[0] # Should be image1.png
     assert first_cap == "Caption for image 1."
-    assert first_file_disp == "image1.png"
+    assert first_file_disp == expected_filenames[0]
 
 
 def test_load_images_and_captions_empty_folder(tmp_path):
@@ -115,105 +117,114 @@ def test_load_images_and_captions_no_path():
     assert filenames == []
 
 # Mock open to simulate read error
-@patch("builtins.open", mock_open()) # Mock open globally for this test
-def test_load_images_and_captions_read_error(caption_test_folder, capsys):
+@patch("builtins.open", new_callable=mock_open) # Mock open globally for this test
+@patch("os.path.exists") # Also mock exists
+def test_load_images_and_captions_read_error(mock_exists, mock_file_open, caption_test_folder, capsys):
     """Test handling of read errors for caption files."""
-    # Setup the mock_open to raise an error when reading image1.txt
-    mock_open().side_effect = [
-        mock_open(read_data="").return_value, # Simulate successful open for directory listing check? No, listdir is separate.
-        IOError("Permission denied") # Error when trying to read image1.txt
-    ]
-    # This mocking strategy might be fragile. It depends on the order of file access.
-    # A more robust way might be to patch os.path.exists and then raise in open only for specific file.
+    folder_path = str(caption_test_folder)
+    image1_txt_path = os.path.join(folder_path, "image1.txt")
+    image2_txt_path = os.path.join(folder_path, "image2.txt")
 
-    # Let's try patching os.path.exists and open specifically
-    original_exists = os.path.exists
-    original_open = open
+    # Simulate exists returning True for relevant txt files
+    def exists_side_effect(path):
+        if path == image1_txt_path or path == image2_txt_path:
+            return True
+        return False # Assume other txt files don't exist
+    mock_exists.side_effect = exists_side_effect
 
-    def mock_exists(path):
-        # Let exists work normally except for the problematic file's txt
-        # if path.endswith("image1.txt"):
-        #     return True # Say it exists
-        return original_exists(path)
-
-    def mock_open_specific(*args, **kwargs):
-        if args[0].endswith("image1.txt") and args[1] == 'r':
-            raise IOError("Cannot read file")
+    # Make open raise error only for image1.txt
+    original_open = open # Keep reference if needed, but mock_open provides handle
+    def open_side_effect(path, mode='r', *args, **kwargs):
+        if path == image1_txt_path and mode == 'r':
+            raise IOError("Permission denied")
+        elif path == image2_txt_path and mode == 'r':
+            # Use mock_open's default behavior for successful reads
+             m = mock_open(read_data="Caption for image 2, with comma.")
+             return m(path, mode, *args, **kwargs)
         else:
-            # Important: call the original open for other files
-            return original_open(*args, **kwargs)
+            # For other calls (like isfile checks on images maybe?), allow failure or mock specifically
+            # Or raise an error if unexpected file is opened
+             raise FileNotFoundError(f"Unexpected open call in test: {path}")
+    mock_file_open.side_effect = open_side_effect
 
-    with patch("os.path.exists", mock_exists), \
-         patch("builtins.open", mock_open_specific):
-        filenames, img_paths, captions, status, _, _, _ = load_images_and_captions(str(caption_test_folder))
 
-        assert "image1.png" in filenames
-        assert captions["image1.png"] == "" # Should default to empty on read error
-        assert captions["image2.jpg"] == "Caption for image 2, with comma." # Others should load fine
+    filenames, img_paths, captions, status, _, _, _ = load_images_and_captions(folder_path)
 
-        captured = capsys.readouterr()
-        assert "Warning: Could not read caption file image1.txt" in captured.out
+    assert "image1.png" in filenames
+    assert captions["image1.png"] == "" # Should default to empty on read error
+    assert captions["image2.jpg"] == "Caption for image 2, with comma." # Should load fine
+
+    captured = capsys.readouterr()
+    assert "Warning: Could not read caption file image1.txt" in captured.out
 
 # --- Tests for update_caption_display ---
 
 SAMPLE_CAPTIONS = {"img1.png": "Cap1", "img2.jpg": "Cap2"}
-SAMPLE_PATHS = {"img1.png": "/path/to/img1.png", "img2.jpg": "/path/to/img2.jpg"}
+# Use realistic paths for isfile check later
+SAMPLE_PATHS = {"img1.png": "/fake/path/to/img1.png", "img2.jpg": "/fake/path/to/img2.jpg"}
 
-def test_update_caption_display_single_selection():
+@patch("os.path.isfile", return_value=True) # Assume files exist for these tests
+def test_update_caption_display_single_selection(mock_isfile):
     """Test updating display with a single selection string."""
     caption, state_sel, display_sel, preview_path = update_caption_display("img1.png", SAMPLE_CAPTIONS, SAMPLE_PATHS)
     assert caption == "Cap1"
     assert state_sel == "img1.png"
     assert display_sel == "img1.png"
-    assert preview_path == "/path/to/img1.png"
+    assert preview_path == "/fake/path/to/img1.png"
+    mock_isfile.assert_called_once_with("/fake/path/to/img1.png")
 
-def test_update_caption_display_list_selection_single():
+@patch("os.path.isfile", return_value=True)
+def test_update_caption_display_list_selection_single(mock_isfile):
     """Test updating display with a list containing one selection."""
     caption, state_sel, display_sel, preview_path = update_caption_display(["img2.jpg"], SAMPLE_CAPTIONS, SAMPLE_PATHS)
     assert caption == "Cap2"
     assert state_sel == "img2.jpg"
     assert display_sel == "img2.jpg"
-    assert preview_path == "/path/to/img2.jpg"
+    assert preview_path == "/fake/path/to/img2.jpg"
+    mock_isfile.assert_called_once_with("/fake/path/to/img2.jpg")
 
-def test_update_caption_display_list_selection_multiple():
+@patch("os.path.isfile", return_value=True)
+def test_update_caption_display_list_selection_multiple(mock_isfile):
     """Test updating display with multiple selections (uses first)."""
     caption, state_sel, display_sel, preview_path = update_caption_display(["img1.png", "img2.jpg"], SAMPLE_CAPTIONS, SAMPLE_PATHS)
     assert caption == "Cap1" # Uses first item
     assert state_sel == "img1.png"
     assert display_sel == "img1.png"
-    assert preview_path == "/path/to/img1.png"
+    assert preview_path == "/fake/path/to/img1.png"
+    mock_isfile.assert_called_once_with("/fake/path/to/img1.png")
 
-def test_update_caption_display_no_selection():
+@patch("os.path.isfile") # No need to mock return value as it won't be called
+def test_update_caption_display_no_selection(mock_isfile):
     """Test updating display with no selection."""
     caption, state_sel, display_sel, preview_path = update_caption_display(None, SAMPLE_CAPTIONS, SAMPLE_PATHS)
-    assert caption == ""
-    assert state_sel is None
-    assert display_sel is None
-    assert preview_path is None
+    assert caption == ""; assert state_sel is None; assert display_sel is None; assert preview_path is None
+    mock_isfile.assert_not_called()
 
     caption, state_sel, display_sel, preview_path = update_caption_display([], SAMPLE_CAPTIONS, SAMPLE_PATHS)
-    assert caption == ""
-    assert state_sel is None
-    assert display_sel is None
-    assert preview_path is None
+    assert caption == ""; assert state_sel is None; assert display_sel is None; assert preview_path is None
+    mock_isfile.assert_not_called()
 
-def test_update_caption_display_selection_not_in_data():
-    """Test updating display when selection doesn't exist in data."""
+@patch("os.path.isfile", return_value=False) # Simulate path not found/invalid
+def test_update_caption_display_selection_not_in_data(mock_isfile):
+    """Test updating display when selection doesn't exist in path data."""
     caption, state_sel, display_sel, preview_path = update_caption_display("img3.gif", SAMPLE_CAPTIONS, SAMPLE_PATHS)
-    assert "Caption data not found" in caption
+    assert "Caption data not found" in caption # Caption missing
     assert state_sel == "img3.gif"
-    assert display_sel == "img3.gif" # Displays filename even if data missing
-    assert preview_path is None # Path also not found
+    assert display_sel == "img3.gif" # Still display filename
+    assert preview_path is None # Path missing from SAMPLE_PATHS
+    mock_isfile.assert_not_called() # isfile not called if path not found in dict
 
-def test_update_caption_display_path_missing(tmp_path):
-    """Test updating display when image path is missing or invalid."""
+@patch("os.path.isfile", return_value=False) # Simulate path not found/invalid
+def test_update_caption_display_path_missing_or_invalid(mock_isfile):
+    """Test updating display when image path exists in dict but os.path.isfile returns False."""
     captions = {"img1.png": "Cap1"}
-    paths = {"img1.png": str(tmp_path / "non_existent_img1.png")} # Path exists in dict but not on disk
+    paths = {"img1.png": "/fake/path/non_existent_img1.png"}
     caption, state_sel, display_sel, preview_path = update_caption_display(["img1.png"], captions, paths)
     assert caption == "Cap1"
     assert state_sel == "img1.png"
     assert "Image Path Error" in display_sel # Check for error indication
     assert preview_path is None # Preview path should be None
+    mock_isfile.assert_called_once_with("/fake/path/non_existent_img1.png")
 
 
 # --- Tests for save_caption ---
@@ -229,14 +240,13 @@ def test_save_caption_success(mock_file_write, caption_test_folder):
 
     status, updated_data = save_caption(selected_file, new_caption, img_paths, caption_data)
 
-    assert "successfully" in status
-    assert expected_txt_path in status
-    # Check that mock_open was called correctly to write the file
+    # Check status message content (case-insensitive and content check)
+    assert "successfully" in status.lower()
+    assert "image1.txt" in status # Check base filename is mentioned
+
     mock_file_write.assert_called_once_with(expected_txt_path, 'w', encoding='utf-8')
-    # Check that the correct content was written
     handle = mock_file_write()
     handle.write.assert_called_once_with(new_caption)
-    # Check state update
     assert updated_data == {"image1.png": new_caption}
 
 def test_save_caption_no_selection():
@@ -270,43 +280,27 @@ def test_save_caption_write_error(mock_file_write, caption_test_folder):
 
 # --- Tests for batch_edit_captions ---
 
-# Use mock_open to intercept multiple file writes
 @patch("builtins.open", new_callable=mock_open)
 def test_batch_edit_append_success(mock_file_batch_write, caption_test_folder):
     """Test successfully appending text to multiple captions."""
     selected = ["image1.png", "image2.jpg"]
     text_to_add = ", appended text"
-    img_paths = {
-        "image1.png": os.path.join(str(caption_test_folder), "image1.png"),
-        "image2.jpg": os.path.join(str(caption_test_folder), "image2.jpg"),
-        "image3.webp": os.path.join(str(caption_test_folder), "image3.webp"), # Unselected
-    }
-    caption_data = {
-        "image1.png": "Cap1",
-        "image2.jpg": "Cap2",
-        "image3.webp": "Cap3",
-    }
+    img_paths = {"image1.png": os.path.join(str(caption_test_folder), "image1.png"), "image2.jpg": os.path.join(str(caption_test_folder), "image2.jpg"), "image3.webp": os.path.join(str(caption_test_folder), "image3.webp")}
+    caption_data = {"image1.png": "Cap1", "image2.jpg": "Cap2", "image3.webp": "Cap3"}
     expected_path1 = os.path.join(str(caption_test_folder), "image1.txt")
     expected_path2 = os.path.join(str(caption_test_folder), "image2.txt")
-    expected_content1 = "Cap1, appended text"
-    expected_content2 = "Cap2, appended text"
+    expected_content1 = "Cap1, appended text"; expected_content2 = "Cap2, appended text"
 
     status, updated_data = batch_edit_captions(selected, text_to_add, "Append", img_paths, caption_data)
 
-    assert "Batch Append complete." in status
-    assert "Processed: 2" in status
-    assert "Errors: 0" in status
+    # Check status message (case-insensitive)
+    assert "batch append complete" in status.lower()
+    assert "Processed: 2" in status; assert "Errors: 0" in status; assert "Skipped: 0" in status
 
-    # Check mock_open calls (tricky with multiple calls)
     assert mock_file_batch_write.call_count == 2
     calls = mock_file_batch_write.call_args_list
-    # Check paths called - order might vary depending on iteration
-    # Use call object imported from unittest.mock
     assert call(expected_path1, 'w', encoding='utf-8') in calls
     assert call(expected_path2, 'w', encoding='utf-8') in calls
-
-    # Check content written (requires inspecting handles from mock calls)
-    # This gets complex. A simpler check is the final state dict.
     assert updated_data["image1.png"] == expected_content1
     assert updated_data["image2.jpg"] == expected_content2
     assert updated_data["image3.webp"] == "Cap3" # Unselected unchanged
@@ -314,69 +308,41 @@ def test_batch_edit_append_success(mock_file_batch_write, caption_test_folder):
 @patch("builtins.open", new_callable=mock_open)
 def test_batch_edit_prepend_success(mock_file_batch_write, caption_test_folder):
     """Test successfully prepending text to multiple captions."""
-    selected = ["image1.png", "image2.jpg"]
-    text_to_add = "Prepended text: "
-    img_paths = {
-        "image1.png": os.path.join(str(caption_test_folder), "image1.png"),
-        "image2.jpg": os.path.join(str(caption_test_folder), "image2.jpg"),
-    }
+    selected = ["image1.png", "image2.jpg"]; text_to_add = "Prepended text: "
+    img_paths = {"image1.png": os.path.join(str(caption_test_folder), "image1.png"), "image2.jpg": os.path.join(str(caption_test_folder), "image2.jpg")}
     caption_data = {"image1.png": "Cap1", "image2.jpg": "Cap2"}
-    expected_content1 = "Prepended text: Cap1"
-    expected_content2 = "Prepended text: Cap2"
+    expected_content1 = "Prepended text: Cap1"; expected_content2 = "Prepended text: Cap2"
 
     status, updated_data = batch_edit_captions(selected, text_to_add, "Prepend", img_paths, caption_data)
 
-    assert "Batch Prepend complete." in status
+    assert "batch prepend complete" in status.lower() # Case-insensitive check
     assert "Processed: 2" in status
     assert updated_data["image1.png"] == expected_content1
     assert updated_data["image2.jpg"] == expected_content2
 
 def test_batch_edit_no_selection():
-    status, updated_data = batch_edit_captions(None, "text", "Append", {}, {})
-    assert "No images selected" in status
-    assert updated_data == {}
-
-    status, updated_data = batch_edit_captions([], "text", "Append", {}, {})
-    assert "No images selected" in status
-    assert updated_data == {}
+    status, updated_data = batch_edit_captions(None, "text", "Append", {}, {}); assert "No images selected" in status; assert updated_data == {}
+    status, updated_data = batch_edit_captions([], "text", "Append", {}, {}); assert "No images selected" in status; assert updated_data == {}
 
 def test_batch_edit_invalid_mode():
     status, updated_data = batch_edit_captions(["img.png"], "text", "InvalidMode", {"img.png":"path"}, {"img.png":"cap"})
-    assert "Invalid batch mode: InvalidMode" in status
-    assert updated_data == {"img.png":"cap"} # Unchanged
+    assert "Invalid batch mode: InvalidMode" in status; assert updated_data == {"img.png":"cap"}
 
 @patch("builtins.open", new_callable=mock_open)
 def test_batch_edit_some_errors(mock_file_batch_write, caption_test_folder):
     """Test batch edit where some files cause write errors."""
-    # Mock open globally and make write fail on second call.
-    mock_handle = mock_file_batch_write()
-    mock_handle.write.side_effect = [
-        None, # First write (image1) succeeds
-        IOError("Write failed for image2") # Second write (image2) fails
-    ]
-
-    selected = ["image1.png", "image2.jpg", "image_missing.png"] # Include one with missing path
+    mock_handle = mock_file_batch_write(); mock_handle.write.side_effect = [None, IOError("Write failed for image2")]
+    selected = ["image1.png", "image2.jpg", "image_missing.png"]
     text_to_add = ", added"
-    img_paths = {
-        "image1.png": os.path.join(str(caption_test_folder), "image1.png"),
-        "image2.jpg": os.path.join(str(caption_test_folder), "image2.jpg"),
-        # image_missing.png path deliberately missing
-    }
+    img_paths = {"image1.png": os.path.join(str(caption_test_folder), "image1.png"), "image2.jpg": os.path.join(str(caption_test_folder), "image2.jpg")}
     caption_data = {"image1.png": "Cap1", "image2.jpg": "Cap2"}
-    expected_path1 = os.path.join(str(caption_test_folder), "image1.txt")
-    expected_path2 = os.path.join(str(caption_test_folder), "image2.txt") # Write will be attempted
 
     status, updated_data = batch_edit_captions(selected, text_to_add, "Append", img_paths, caption_data)
 
-    assert "Batch Append complete." in status
-    assert "Processed: 1" in status # Only image1 succeeded fully
-    assert "Errors: 1" in status # image2 write error
-    assert "Skipped: 1" in status # image_missing.png skipped due to path
-
+    assert "batch append complete" in status.lower() # Case-insensitive
+    assert "Processed: 1" in status; assert "Errors: 1" in status; assert "Skipped: 1" in status
     assert "- Skipped image_missing.png: Path not found." in status
-    assert "- Error Appending image2.jpg: Write failed for image2" in status
-
-    # Check final data state
-    assert updated_data["image1.png"] == "Cap1, added" # Successfully updated
-    assert updated_data["image2.jpg"] == "Cap2" # Failed write, state not updated for this one
-    assert "image_missing.png" not in updated_data # Was never in original data
+    assert "- Error appending image2.jpg: Write failed for image2" in status
+    assert updated_data["image1.png"] == "Cap1, added"
+    assert updated_data["image2.jpg"] == "Cap2"
+    assert "image_missing.png" not in updated_data

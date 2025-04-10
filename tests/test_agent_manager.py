@@ -7,7 +7,8 @@ import time
 from unittest.mock import patch, MagicMock, call # Import call for checking multiple calls
 
 # --- Adjust import path ---
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(test_dir)
 sys.path.insert(0, project_root)
 
 try:
@@ -282,7 +283,7 @@ def test_run_team_workflow_missing_role_in_step(mock_get_llm, mock_add_history, 
     assert mock_get_llm.call_args.kwargs['role'] == "RoleA"
 
     # Check history
-    assert mock_add_history.call_count == 3 # Start + Step1 (run) + Step2 (skip) + Final
+    assert mock_add_history.call_count == 4 # Start + Step1 (run) + Step2 (skip) + Final
     history_calls = mock_add_history.call_args_list
     assert "Workflow Start: 'MissingRoleTeam'" in history_calls[0].args[1]
     assert "Workflow Step 1: 'RoleA'" in history_calls[1].args[1]
@@ -372,13 +373,13 @@ def test_run_team_workflow_no_successful_steps(mock_get_llm, mock_add_history, m
     # Final output comes from the *first* error encountered
     assert final_output.startswith("Workflow stopped due to error in step 1 (RoleA)")
 
-    # Check intermediate steps (both should show errors)
+    # Check intermediate steps (only step 1 is guaranteed to be recorded before exit)
     assert intermediate is not None
-    assert len(intermediate) >= 1 # Only step 1 is guaranteed to be recorded before exit
+    assert len(intermediate) == 1
     assert intermediate[1]['role'] == "RoleA"
     assert intermediate[1]['output'] is None
     assert intermediate[1]['error'] == agent_error_message
-    # Step 2 won't be in intermediate dict as the workflow exited after step 1's error
+    assert 2 not in intermediate # Step 2 not reached
 
     # Check history
     assert mock_add_history.call_count == 2 # Start + Step1 (error)

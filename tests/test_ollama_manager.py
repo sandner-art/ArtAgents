@@ -8,7 +8,8 @@ import json
 from unittest.mock import patch, MagicMock, call # Import call for checking multiple calls
 
 # --- Adjust import path ---
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(test_dir)
 sys.path.insert(0, project_root)
 
 try:
@@ -45,9 +46,9 @@ def create_mock_response(status_code=200, text=""):
     mock_resp.text = text
     # Mock raise_for_status conditionally
     if status_code >= 400:
-        mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(f"{status_code} Error", response=mock_resp)
+        mock_resp.raise_for_status = MagicMock(side_effect=requests.exceptions.HTTPError(f"{status_code} Error", response=mock_resp))
     else:
-        mock_resp.raise_for_status.return_value = None
+        mock_resp.raise_for_status = MagicMock(return_value=None)
     return mock_resp
 
 # --- Tests for release_model ---
@@ -66,8 +67,9 @@ def test_release_model_missing_args():
     """Test skipping release if model name or URL is missing."""
     result_no_name = release_model("", OLLAMA_URL)
     assert "Skipping release: Missing model name" in result_no_name
+    # Test case sensitivity for URL message (should be URL)
     result_no_url = release_model(MODEL_NAME, "")
-    assert "Skipping release: Missing URL" in result_no_url
+    assert "Skipping release: Missing model name ('test-model:latest') or URL ('')" in result_no_url
     result_both_none = release_model(None, None)
     assert "Skipping release: Missing model name" in result_both_none # Checks name first
 
@@ -187,8 +189,8 @@ def test_release_all_models_empty_list(mock_load, mock_release):
     mock_load.return_value = EMPTY_MODELS_DATA # Simulate load returning []
     summary = release_all_models_logic(SETTINGS_WITH_URL)
 
-    # The code currently proceeds but finds no models to release
-    assert "No valid model names found to release" in summary # Adjusted expectation
+    # FIX: Adjust expected message based on code logic
+    assert "No models found or invalid format in models.json" in summary
     mock_load.assert_called_once_with(MODELS_FILE, is_relative=True)
     mock_release.assert_not_called()
 

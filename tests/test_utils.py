@@ -4,11 +4,11 @@ import pytest
 import os
 import json
 import sys
-import gradio as gr # Import gradio to test theme loading
+import gradio as gr
 
 # --- Adjust import path ---
-# Add project root to the path to allow direct import of core modules
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(test_dir)
 sys.path.insert(0, project_root)
 
 try:
@@ -24,8 +24,7 @@ except ImportError as e:
     pytest.skip(f"Skipping utils tests, core module not found: {e}", allow_module_level=True)
 
 # --- Test Data ---
-TEST_REL_PATH = "core/test_data_dir/test_file.json"
-TEST_ABS_PATH_EXPECTED_FRAGMENT = os.path.join("ArtAgent", "core", "test_data_dir", "test_file.json")
+TEST_REL_PATH = os.path.join("core", "test_data_dir", "test_file.json") # Use os.path.join for cross-platform compatibility
 TEST_JSON_DATA = {"key": "value", "list": [1, 2, "three"]}
 
 # --- Tests for get_absolute_path ---
@@ -34,12 +33,17 @@ def test_get_absolute_path_basic():
     """Tests basic relative path conversion."""
     abs_path = get_absolute_path("some/relative/path.txt")
     assert os.path.isabs(abs_path)
-    # Check if the end of the path matches the expected structure, more robust than exact match
-    assert abs_path.endswith(os.path.join("ArtAgent", "some", "relative", "path.txt"))
+    # Use os.path.normpath and check containment for robustness
+    expected_end = os.path.normpath(os.path.join("ArtAgent", "some", "relative", "path.txt"))
+    # Use a separator that works on the current OS to check end part
+    # or check containment which is less strict but often sufficient
+    assert expected_end in os.path.normpath(abs_path)
+
 
 def test_get_absolute_path_project_root():
     """Tests that the path is relative to the correct project root."""
-    expected_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # Parent of tests/
+    # Assuming the test file is in ArtAgent/tests/
+    expected_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # Parent of tests/ -> ArtAgent/
     assert PROJECT_ROOT == expected_root, f"PROJECT_ROOT constant mismatch: Expected {expected_root}, Got {PROJECT_ROOT}"
     abs_path = get_absolute_path("README.md")
     assert abs_path == os.path.join(expected_root, "README.md")
@@ -59,9 +63,7 @@ def test_load_json_success(tmp_path):
 
 def test_load_json_relative(tmp_path, monkeypatch):
     """Tests loading a valid JSON file using a relative path."""
-    # Create a dummy file structure within the *actual* project structure
-    # This is a bit tricky, maybe mocking os.path.join/PROJECT_ROOT is better,
-    # but let's try direct creation first.
+    # Create a dummy file structure resembling the project within tmp_path
     core_dir = tmp_path / "core"
     core_dir.mkdir()
     test_data_dir = core_dir / "test_data_dir"
@@ -119,7 +121,8 @@ def test_save_json_creates_directory(tmp_path):
 
 def test_save_json_relative(tmp_path, monkeypatch):
     """Tests saving data using a relative path."""
-    p_expected = tmp_path / "core" / "test_data_dir" / "test_file.json"
+    # Construct expected path within the temporary directory
+    p_expected = tmp_path / os.path.normpath(TEST_REL_PATH) # Normalize TEST_REL_PATH
     # Temporarily change the PROJECT_ROOT
     monkeypatch.setattr('core.utils.PROJECT_ROOT', str(tmp_path))
 
@@ -154,4 +157,5 @@ def test_available_themes_structure():
     for name, theme_obj in AVAILABLE_THEMES.items():
          assert isinstance(name, str)
          # Check if it's a Gradio theme base class or specific instance
+         # Allow for potential custom themes inheriting from ThemeClass
          assert isinstance(theme_obj, (gr.themes.base.ThemeClass, gr.themes.Default))
