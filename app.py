@@ -405,6 +405,16 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     )
 
     # Save Team Button needs to update team state and dropdowns
+    # CORRECTED INPUTS: Add settings_state and loaded_file_agents_state
+    save_team_inputs = [
+        editor_comps['team_name_textbox'],
+        editor_comps['team_description_textbox'],
+        editor_comps['assembly_strategy_radio'],
+        editor_comps['current_team_editor_state'], # Pass internal state with steps list
+        teams_data_state, # Pass state with all teams to update
+        settings_state, # ADDED: Needed by logic to update dropdowns
+        chat_comps['loaded_file_agents_state'] # ADDED: Needed by logic to update dropdowns
+    ]
     save_team_outputs = [
         teams_data_state,                       # 1. Update the main state holding all teams
         editor_comps['team_select_dropdown'],   # 2. Update the editor's team selection dropdown
@@ -413,17 +423,18 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     ]
     editor_comps['save_team_button'].click(
         fn=save_team_from_editor, # Logic from core/app_logic.py
-        inputs=[
-            editor_comps['team_name_textbox'],
-            editor_comps['team_description_textbox'],
-            editor_comps['assembly_strategy_radio'],
-            editor_comps['current_team_editor_state'], # Pass internal state with steps list
-            teams_data_state # Pass state with all teams to update
-        ],
+        inputs=save_team_inputs,  # Use the corrected input list
         outputs=save_team_outputs
     )
 
     # Delete Team Button needs to update team state, dropdowns, and clear editor
+    # CORRECTED INPUTS: Add settings_state and loaded_file_agents_state
+    delete_team_inputs = [
+        editor_comps['team_select_dropdown'], # Name to delete
+        teams_data_state,                     # All teams data state
+        settings_state,                       # ADDED: Needed by logic to update dropdowns
+        chat_comps['loaded_file_agents_state'] # ADDED: Needed by logic to update dropdowns
+    ]
     delete_outputs = [
          teams_data_state,                      # 1. Update main teams state
          editor_comps['team_select_dropdown'],  # 2. Update editor dropdown
@@ -438,10 +449,7 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     ]
     editor_comps['delete_team_button'].click(
         fn=delete_team_logic, # Logic from core/app_logic.py
-        inputs=[
-            editor_comps['team_select_dropdown'], # Name to delete
-            teams_data_state                      # All teams data state
-        ],
+        inputs=delete_team_inputs, # Use the corrected input list
         outputs=delete_outputs
     )
 
@@ -464,13 +472,6 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     )
 
     # -- Experiment Sweep Tab Wiring --
-# ArtAgent/app.py - inside with gr.Blocks()
-
-    # --- Wire Event Handlers ---
-    # ... (other handlers) ...
-
-    # -- Experiment Sweep Tab Wiring --
-    # -- Experiment Sweep Tab Wiring --
     sweep_comps['sweep_start_button'].click(
         fn=run_sweep, # Call the modified run_sweep
         inputs=[ # Inputs remain the same
@@ -483,7 +484,7 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
             teams_data_state,
         ],
         outputs=[sweep_comps['sweep_status_display']]
-    )  # REMOVE .queue() if using concurrency_limit
+    )
 
     # -- Captions Tab Wiring --
     caption_comps['captions_load_button'].click(
@@ -497,16 +498,11 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
             caption_comps['captions_status_display'], # Show status
             caption_selected_item_state,        # Update state with first item
             caption_comps['captions_caption_display'], # Show first caption
-            caption_comps['caption_selected_filename_display'] # Show first filename (Added output)
-            # Need to modify load_images_and_captions to return filename for display
+            caption_comps['caption_selected_filename_display'] # Show first filename
         ]
-        # Add .then() maybe to update selected filename display? Or modify return signature.
-        # Let's modify return signature of load_images_and_captions later if needed.
     )
 
-    # Update caption display when selection changes in CheckboxGroup
-    # CheckboxGroup change event returns the list of selected values (filenames)
-    # Update caption display AND preview when selection changes
+    # Update caption display AND preview when selection changes in CheckboxGroup
     caption_comps['captions_image_selector'].change(
         fn=update_caption_display,
         inputs=[
@@ -551,8 +547,6 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
             caption_comps['captions_status_display'],
             caption_data_state # Update state with modified captions
         ]
-        # TODO: After batch edit, the displayed caption might be stale if the selected image was modified.
-        # Could add a .then() to refresh the caption display based on caption_selected_item_state.
     )
 
     # Batch Prepend Button
@@ -569,7 +563,6 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
             caption_comps['captions_status_display'],
             caption_data_state # Update state with modified captions
         ]
-        # TODO: Add .then() to refresh caption display if needed.
     )
 
 # --- atexit handler ---
