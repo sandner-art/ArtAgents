@@ -105,8 +105,9 @@ def execute_chat_or_team(
              return "Error: Could not determine worker model name for team.", session_history_text, None, new_session_history_list
 
         # Call the Agent Manager's workflow execution function
-        # It returns the final output string and the *updated persistent history list*
-        final_output, updated_persistent_history_list = agent_manager.run_team_workflow(
+        # It returns the final output string, the *updated persistent history list*, and intermediate steps (or None)
+        # CORRECTED: Unpack all three return values
+        final_output, updated_persistent_history_list, _ = agent_manager.run_team_workflow(
             team_name=team_name,
             team_definition=team_definition,
             user_input=user_input,
@@ -114,7 +115,14 @@ def execute_chat_or_team(
             all_roles_data=all_roles_data,
             history_list=list(history_list_state), # Pass copy of persistent history
             worker_model_name=worker_model_name
+            # Note: return_intermediate_steps defaults to False inside run_team_workflow
+            # so we don't explicitly pass it here, but we still need to unpack the third value.
         )
+
+        # The updated_persistent_history_list returned by the workflow IS the new state
+        # for persistent history. We need to update history_list_state in app.py,
+        # but this function currently doesn't return it. Let's fix this later if needed.
+        # For now, history.add_to_history within the manager updates the file directly.
 
         # Update session history list with a summary of the workflow run
         summary_entry = f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\nWorkflow Run: '{team_name}'\nFinal Output Length: {len(final_output)}\n---\n(Full steps in Persistent History)"
@@ -698,42 +706,52 @@ def delete_team_logic(
         # Don't update state/dropdowns if save failed, just status and editor clear
         return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
 
-# Add image_paths_dict to signature
-def update_caption_display(selected_items: list | str | None, caption_data_dict: dict, image_paths_dict: dict):
+
+# --- Captioning Callbacks ---
+# (Keep existing captioning callbacks here, including update_caption_display etc.)
+def update_caption_display(
+    selected_items: list | str | None, # Input from CheckboxGroup/Selector
+    caption_data_dict: dict,         # Input from caption_data_state
+    image_paths_dict: dict           # Input from image_paths_state
+    ) -> tuple[str, str | None, str | None, str | None]: # Return 4 values
     """
     Retrieves caption text AND image path for the selected image filename.
+    Handles input potentially being a list from CheckboxGroup.
 
     Returns:
-        tuple: Contains:
-            - str: The caption text to display.
-            - str | None: The specific filename selected.
-            - str | None: The specific filename selected again.
-            - str | None: The absolute image path for preview, or None.
+        tuple: (caption_text, selected_filename_state, selected_filename_display, image_path_for_preview)
     """
     selected_filename = None
-    # ... (logic to get single selected_filename from selected_items list) ...
+    # Handle list input from CheckboxGroup
     if isinstance(selected_items, list):
-         selected_filename = selected_items[0] if selected_items else None
+        selected_filename = selected_items[0] if selected_items else None
+        if selected_items and len(selected_items) > 1:
+             print(f"Info: Multiple images selected ({len(selected_items)}), displaying data for first: {selected_filename}")
     elif isinstance(selected_items, str):
-         selected_filename = selected_items
+         selected_filename = selected_items # Handle single string if needed
 
     image_path_for_preview = None
     caption_text = ""
+    filename_display = selected_filename # Default display name
 
-    if not selected_filename or not caption_data_dict or not image_paths_dict:
-        print("Update caption display: No valid selection or data missing.")
+    if not selected_filename or not isinstance(caption_data_dict, dict) or not isinstance(image_paths_dict, dict):
+        print("Update caption display: No valid selection or required data dictionaries missing.")
         # Return 4 values for clearing outputs
         return "", None, None, None
     else:
-        caption_text = caption_data_dict.get(selected_filename, f"Caption not found.")
-        image_path_for_preview = image_paths_dict.get(selected_filename) # Get full path
-        if not image_path_for_preview:
-             print(f"Warning: Image path not found for selected file: {selected_filename}")
+        # Use .get() for safer dictionary access
+        caption_text = caption_data_dict.get(selected_filename, f"Caption data not found for '{selected_filename}'.")
+        image_path_for_preview = image_paths_dict.get(selected_filename) # Get full path using the key
+        if not image_path_for_preview or not os.path.isfile(image_path_for_preview):
+             print(f"Warning: Image path not found or invalid for selected file: {selected_filename}")
+             filename_display = f"{selected_filename} (Image Path Error)" # Indicate error
+             image_path_for_preview = None # Don't try to show preview if path is bad
 
         print(f"Displaying caption and preview for: {selected_filename}")
 
     # Outputs: caption_display, selected_item_state, selected_filename_display, image_preview
-    return caption_text, selected_filename, selected_filename, image_path_for_preview
+    return caption_text, selected_filename, filename_display, image_path_for_preview
+
 
 # --- History Callbacks ---
 def show_clear_confirmation(): return gr.update(visible=True)
