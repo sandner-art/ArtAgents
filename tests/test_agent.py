@@ -39,12 +39,13 @@ try:
     PIL_IMAGE_MODULE_PATH = 'agents.ollama_agent.Image'
     # Path to the specific Image class used in the `isinstance` check
     PIL_IMAGE_CLASS_PATH = 'agents.ollama_agent.Image.Image'
+    ISINSTANCE_PATH = 'agents.ollama_agent.isinstance' # Path for patching isinstance
 
 
 except ImportError as e:
     pytest.skip(f"Skipping agent tests, modules not found: {e}", allow_module_level=True)
     def get_llm_response(*args, **kwargs): raise NotImplementedError("Agent function not found/imported.")
-    REQUESTS_POST_PATH = 'builtins.print'; BASE64_B64ENCODE_PATH = 'builtins.print'; IO_BYTESIO_PATH = 'builtins.print'; PIL_IMAGE_MODULE_PATH = 'builtins.print'; PIL_IMAGE_CLASS_PATH = 'builtins.print'
+    REQUESTS_POST_PATH = 'builtins.print'; BASE64_B64ENCODE_PATH = 'builtins.print'; IO_BYTESIO_PATH = 'builtins.print'; PIL_IMAGE_MODULE_PATH = 'builtins.print'; PIL_IMAGE_CLASS_PATH = 'builtins.print'; ISINSTANCE_PATH = 'builtins.print'
 
 
 # --- Test Data ---
@@ -151,40 +152,33 @@ def test_get_llm_response_json_decode_error_in_stream(mock_post):
     result = get_llm_response(**DEFAULT_ARGS)
     assert result.startswith("Part 1.")
     assert "[Error decoding stream chunk:" in result
-    # assert "Expecting value: line 1 column 1" in result # Old assertion
-    assert "Unterminated string starting at" in result # Updated assertion matching the pytest output
+    assert "Unterminated string starting at" in result # FIXED Assertion
     assert "Part 3" not in result
 
-@patch('agents.ollama_agent.isinstance')
+
+@patch(ISINSTANCE_PATH) # Patch isinstance used inside the agent function
 @patch(REQUESTS_POST_PATH)
 @patch(BASE64_B64ENCODE_PATH)
 @patch(IO_BYTESIO_PATH) # Patch the class io.BytesIO
-@patch(PIL_IMAGE_CLASS_PATH) # Patch the class Image.Image used in isinstance
-@patch(PIL_IMAGE_MODULE_PATH) # Patch the module Image used for saving etc.
+@patch(PIL_IMAGE_CLASS_PATH) # Patch the class Image.Image
+@patch(PIL_IMAGE_MODULE_PATH) # Patch the module Image
 def test_get_llm_response_with_image(
     mock_pil_image_module, mock_pil_image_class, mock_bytesio_class, mock_b64encode, mock_post,
-    mock_isinstance # Add the new mock argument
+    mock_isinstance # Add mock argument
 ):
+    """ Test successful call with a single image. """
     # Configure isinstance mock to return True specifically for the Image.Image check
     def isinstance_side_effect(obj, classinfo):
-        # Check if the classinfo being compared against is the mocked PIL Image class
-        if classinfo is mock_pil_image_class:
-            return True # Pretend it's the right type
-        # For other isinstance calls, delegate to the real isinstance
-        return isinstance(obj, classinfo)
+        if classinfo is mock_pil_image_class: # Check against the *mocked* class
+            return True
+        return isinstance(obj, classinfo) # Fallback to real isinstance
     mock_isinstance.side_effect = isinstance_side_effect
 
-
-    """ Test successful call with a single image. """
     stream_chunks = [json.dumps({"response": "Image analyzed.", "done": True})]
     mock_post.return_value = mock_streaming_response(stream_chunks)
 
     # Create a standard MagicMock for the image instance
     mock_image_instance = MagicMock()
-    # Make the isinstance check pass by setting the __class__ attribute
-    # The class being patched is Image.Image within the ollama_agent module
-    mock_image_instance.__class__ = mock_pil_image_class
-
     # Set attributes needed by the code
     mock_image_instance.mode = "RGB"
     mock_image_instance.save = MagicMock()
@@ -222,19 +216,25 @@ def test_get_llm_response_with_invalid_image_object(mock_post, capsys):
     assert "images" not in payload
     captured = capsys.readouterr(); assert "Warning: Item 1 in images list is not a PIL Image object" in captured.out
 
-@patch('agents.ollama_agent.isinstance') # Add this
+@patch(ISINSTANCE_PATH) # Patch isinstance used inside the agent function
 @patch(REQUESTS_POST_PATH)
-@patch(PIL_IMAGE_CLASS_PATH) # Patch Image.Image for isinstance check
-@patch(PIL_IMAGE_MODULE_PATH) # Patch Image module for attributes like mode/save
+@patch(PIL_IMAGE_CLASS_PATH) # Patch Image.Image
+@patch(PIL_IMAGE_MODULE_PATH) # Patch Image module
 def test_get_llm_response_image_processing_error(
-    mock_pil_image_module, mock_pil_image_class, mock_post
+    mock_pil_image_module, mock_pil_image_class, mock_post,
+    mock_isinstance # Add mock argument # FIXED
 ):
     """ Test handling of exceptions during image processing (e.g., save fails). """
-    # Create instance and link its class to the mocked class
+    # Configure isinstance mock to return True specifically for the Image.Image check
+    def isinstance_side_effect(obj, classinfo):
+        if classinfo is mock_pil_image_class: # Check against the *mocked* class
+            return True
+        return isinstance(obj, classinfo) # Fallback to real isinstance
+    mock_isinstance.side_effect = isinstance_side_effect
+
     mock_image_instance = MagicMock()
-    mock_image_instance.__class__ = mock_pil_image_class
     mock_image_instance.mode = "RGB"
-    mock_image_instance.save = MagicMock(side_effect=Exception("PIL Save Error")) # Add save and make it fail
+    mock_image_instance.save = MagicMock(side_effect=Exception("PIL Save Error"))
     args = {**DEFAULT_ARGS, "images": [mock_image_instance]}
     result = get_llm_response(**args)
 
@@ -242,7 +242,7 @@ def test_get_llm_response_image_processing_error(
     assert result.startswith("⚠️ Error: Failed to process image data.")
     assert "PIL Save Error" in result # Check original exception is included
     mock_post.assert_not_called()
-    mock_image_instance.save.assert_called_once() # Check save was attempted
+    mock_image_instance.save.assert_called_once()
 
 
 @patch(REQUESTS_POST_PATH)
