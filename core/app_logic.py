@@ -698,6 +698,42 @@ def delete_team_logic(
         # Don't update state/dropdowns if save failed, just status and editor clear
         return no_change_outputs[0:3] + [msg] + no_change_outputs[4:]
 
+# Add image_paths_dict to signature
+def update_caption_display(selected_items: list | str | None, caption_data_dict: dict, image_paths_dict: dict):
+    """
+    Retrieves caption text AND image path for the selected image filename.
+
+    Returns:
+        tuple: Contains:
+            - str: The caption text to display.
+            - str | None: The specific filename selected.
+            - str | None: The specific filename selected again.
+            - str | None: The absolute image path for preview, or None.
+    """
+    selected_filename = None
+    # ... (logic to get single selected_filename from selected_items list) ...
+    if isinstance(selected_items, list):
+         selected_filename = selected_items[0] if selected_items else None
+    elif isinstance(selected_items, str):
+         selected_filename = selected_items
+
+    image_path_for_preview = None
+    caption_text = ""
+
+    if not selected_filename or not caption_data_dict or not image_paths_dict:
+        print("Update caption display: No valid selection or data missing.")
+        # Return 4 values for clearing outputs
+        return "", None, None, None
+    else:
+        caption_text = caption_data_dict.get(selected_filename, f"Caption not found.")
+        image_path_for_preview = image_paths_dict.get(selected_filename) # Get full path
+        if not image_path_for_preview:
+             print(f"Warning: Image path not found for selected file: {selected_filename}")
+
+        print(f"Displaying caption and preview for: {selected_filename}")
+
+    # Outputs: caption_display, selected_item_state, selected_filename_display, image_preview
+    return caption_text, selected_filename, selected_filename, image_path_for_preview
 
 # --- History Callbacks ---
 def show_clear_confirmation(): return gr.update(visible=True)

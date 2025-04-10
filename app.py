@@ -43,7 +43,13 @@ from ui.team_editor_tab import create_team_editor_tab # Import new UI tab functi
 from ui.roles_tab import create_roles_tabs
 from ui.history_tab import create_history_tab
 from ui.common_ui_elements import create_footer
-
+from ui.captions_tab import create_captions_tab # Import new UI tab
+from core.captioning_logic import ( # Import captioning logic functions
+    load_images_and_captions,
+    update_caption_display,
+    save_caption,
+    batch_edit_captions
+)
 # --- Constants ---
 SETTINGS_FILE = 'settings.json'
 MODELS_FILE = 'models.json'
@@ -130,7 +136,10 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
     api_option_keys_state = gr.State(value=initial_ollama_options_ordered_keys)
     # State for the list of all agent display names available for the editor's dropdown
     all_available_agents_display_state = gr.State(value=all_available_agent_display_names_initial)
-
+    # Add states for captioning tab
+    caption_image_paths_state = gr.State({}) # filename: absolute_path
+    caption_data_state = gr.State({})        # filename: caption_text
+    caption_selected_item_state = gr.State(None) # filename of selected image
 
     # --- Create UI Tabs using functions from ui/ ---
     # Pass initial data needed to build the UI components correctly
@@ -150,6 +159,8 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          load_json(CUSTOM_ROLES_FILE, is_relative=True)
     )
     history_comps = create_history_tab(history_list)
+    # Create the new Captions tab instance
+    caption_comps = create_captions_tab()
 
     create_footer()
 
@@ -474,6 +485,92 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         outputs=[sweep_comps['sweep_status_display']]
     )  # REMOVE .queue() if using concurrency_limit
 
+    # -- Captions Tab Wiring --
+    caption_comps['captions_load_button'].click(
+        fn=load_images_and_captions,
+        inputs=[caption_comps['captions_folder_path']],
+        # Outputs: image_selector_choices, image_paths_state, caption_data_state, status_display, selected_item_state, caption_display
+        outputs=[
+            caption_comps['captions_image_selector'], # Update choices
+            caption_image_paths_state,          # Update state
+            caption_data_state,                 # Update state
+            caption_comps['captions_status_display'], # Show status
+            caption_selected_item_state,        # Update state with first item
+            caption_comps['captions_caption_display'], # Show first caption
+            caption_comps['caption_selected_filename_display'] # Show first filename (Added output)
+            # Need to modify load_images_and_captions to return filename for display
+        ]
+        # Add .then() maybe to update selected filename display? Or modify return signature.
+        # Let's modify return signature of load_images_and_captions later if needed.
+    )
+
+    # Update caption display when selection changes in CheckboxGroup
+    # CheckboxGroup change event returns the list of selected values (filenames)
+    # Update caption display AND preview when selection changes
+    caption_comps['captions_image_selector'].change(
+        fn=update_caption_display,
+        inputs=[
+            caption_comps['captions_image_selector'], # List of selected filenames
+            caption_data_state,                     # Dict of captions
+            caption_image_paths_state               # Dict of image paths (ADDED)
+        ],
+        outputs=[
+            caption_comps['captions_caption_display'],    # Update caption text
+            caption_selected_item_state,                # Update selected item state
+            caption_comps['caption_selected_filename_display'], # Update filename display
+            caption_comps['caption_image_preview']      # Update image preview (ADDED)
+        ]
+    )
+    # Save current caption button
+    caption_comps['captions_save_button'].click(
+        fn=save_caption,
+        inputs=[
+            caption_selected_item_state, # Filename of image being edited
+            caption_comps['captions_caption_display'], # The edited text
+            caption_image_paths_state, # Dict mapping filename -> path
+            caption_data_state        # Dict mapping filename -> caption (to update state)
+        ],
+        # Outputs: status_display, caption_data_state
+        outputs=[
+            caption_comps['captions_status_display'],
+            caption_data_state # Update the state with the saved caption
+        ]
+    )
+
+    # Batch Append Button
+    caption_comps['captions_append_button'].click(
+        fn=lambda *args: batch_edit_captions(*args, mode="Append"), # Use lambda to pass mode
+        inputs=[
+            caption_comps['captions_image_selector'], # List of selected filenames
+            caption_comps['captions_batch_text'],
+            caption_image_paths_state,
+            caption_data_state
+        ],
+        # Outputs: status_display, caption_data_state
+        outputs=[
+            caption_comps['captions_status_display'],
+            caption_data_state # Update state with modified captions
+        ]
+        # TODO: After batch edit, the displayed caption might be stale if the selected image was modified.
+        # Could add a .then() to refresh the caption display based on caption_selected_item_state.
+    )
+
+    # Batch Prepend Button
+    caption_comps['captions_prepend_button'].click(
+        fn=lambda *args: batch_edit_captions(*args, mode="Prepend"), # Use lambda to pass mode
+        inputs=[
+            caption_comps['captions_image_selector'], # List of selected filenames
+            caption_comps['captions_batch_text'],
+            caption_image_paths_state,
+            caption_data_state
+        ],
+        # Outputs: status_display, caption_data_state
+        outputs=[
+            caption_comps['captions_status_display'],
+            caption_data_state # Update state with modified captions
+        ]
+        # TODO: Add .then() to refresh caption display if needed.
+    )
 
 # --- atexit handler ---
 def on_exit():
