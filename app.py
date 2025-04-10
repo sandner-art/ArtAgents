@@ -220,13 +220,12 @@ atexit.register(cleanup_temp_dir)
 def list_images_and_captions(folder_path):
     global temp_dir
     if not os.path.isdir(folder_path):
-        return [], [], [], []
+        return {}, [], []
 
     image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif']
     image_paths = []
-    captions = []
+    captions = {}
     image_gallery = []
-    caption_display = []
 
     # Create a temporary directory
     temp_dir = tempfile.mkdtemp()
@@ -248,39 +247,51 @@ def list_images_and_captions(folder_path):
                 caption = ''
 
             image_paths.append(image_path)  # Keep original image path
-            captions.append(caption)
+            captions[temp_image_path] = caption  # Use temp_image_path as key
             image_gallery.append(temp_image_path)  # Use copied image path
-            caption_display.append(caption)
 
-    return image_paths, captions, image_gallery, caption_display
+    return captions, image_gallery, image_paths
 
 # Function to save all captions
-def save_all_captions(folder_path, captions):
-    for i, caption in enumerate(captions):
-        name = os.path.splitext(os.path.basename(image_paths[i]))[0]
+def save_all_captions(folder_path, captions, image_paths):
+    for image_path in image_paths:
+        name = os.path.splitext(os.path.basename(image_path))[0]
         caption_path = os.path.join(folder_path, name + '.txt')
+        caption = captions.get(image_path, "")
         with open(caption_path, 'w', encoding='utf-8') as f:
             f.write(caption)
     return "All captions saved successfully."
 
-# Function to prepend or append text to captions
-def batch_edit_captions(captions, text, mode):
-    if mode == "Prepend":
-        return [text + caption for caption in captions]
-    elif mode == "Append":
-        return [caption + text for caption in captions]
+# Function to update captions dictionary
+def update_captions(caption, selected_indices, captions, image_gallery):
+    if selected_indices is not None:
+        for idx in selected_indices:
+            selected_image_path = image_gallery[idx]
+            captions[selected_image_path] = caption
     return captions
 
 # Function to update caption display based on selected image
-def update_caption_display(selected_image, image_paths, captions, image_gallery):
-    if selected_image:
-        # Ensure selected_image is a list and get the first element
-        selected_image = selected_image[0] if isinstance(selected_image, list) else selected_image
-        # Find the index of the selected image in the image_gallery
-        selected_index = image_gallery.index(selected_image)
-        # Return the corresponding caption
-        return captions[selected_index]
+def update_caption_display_by_index(selected_indices, captions, image_gallery):
+    if selected_indices is not None:
+        if len(selected_indices) == 1:
+            selected_image_path = image_gallery[selected_indices[0]]
+            caption = captions.get(selected_image_path, "")
+            filename = os.path.basename(selected_image_path)
+            return f"{filename}\n{caption}"
+        else:
+            return ""  # Return empty string for multiple selections
     return ""
+
+# Function to handle batch editing of captions
+def batch_edit_captions(captions, text, mode, selected_indices, image_gallery):
+    if selected_indices is not None:
+        for idx in selected_indices:
+            image_path = image_gallery[idx]
+            if mode == "Prepend":
+                captions[image_path] = text + captions.get(image_path, "")
+            elif mode == "Append":
+                captions[image_path] = captions.get(image_path, "") + text
+    return captions
 
 # Part 4: Gradio Interface Setup
 with gr.Blocks(title="ArtAgents") as demo:
@@ -540,53 +551,54 @@ with gr.Blocks(title="ArtAgents") as demo:
 
         with gr.Row():
             image_paths = gr.State([])
-            captions = gr.State([])
-            image_gallery = gr.Gallery(label="Images", object_fit="contain", height="auto")
+            captions_state = gr.State({})
+            selected_index_state = gr.State([])
+            image_gallery = gr.CheckboxGroup(label="Images", choices=[], type="index")
             caption_display = gr.Textbox(label="Caption", lines=5, value="")
 
         load_button.click(
             fn=list_images_and_captions,
             inputs=[folder_path],
-            outputs=[image_paths, captions, image_gallery, caption_display]
+            outputs=[captions_state, image_gallery, image_paths]
         )
 
         save_all_button.click(
             fn=save_all_captions,
-            inputs=[folder_path, captions],
+            inputs=[folder_path, captions_state, image_paths],
             outputs=[gr.Textbox(label="Status", lines=1)]
         )
 
         prepend_button.click(
             fn=batch_edit_captions,
-            inputs=[captions, batch_edit_text, gr.Textbox(value="Prepend")],
-            outputs=[captions, caption_display]
+            inputs=[captions_state, batch_edit_text, gr.Textbox(value="Prepend"), selected_index_state, image_gallery],
+            outputs=[captions_state]
         )
 
         append_button.click(
             fn=batch_edit_captions,
-            inputs=[captions, batch_edit_text, gr.Textbox(value="Append")],
-            outputs=[captions, caption_display]
+            inputs=[captions_state, batch_edit_text, gr.Textbox(value="Append"), selected_index_state, image_gallery],
+            outputs=[captions_state]
         )
 
         # Update caption display when an image is selected in the gallery
-        image_gallery.select(
-            fn=update_caption_display,
-            inputs=[image_gallery, image_paths, captions, image_gallery],
+        image_gallery.change(
+            fn=update_caption_display_by_index,
+            inputs=[selected_index_state, captions_state, image_gallery],
             outputs=[caption_display]
         )
 
         # Update captions state when caption_display is edited
         caption_display.change(
-            fn=lambda caption, idx, caps: caps[:idx] + [caption] + caps[idx+1:] if idx is not None else caps,
-            inputs=[caption_display, gr.State(None), captions],
-            outputs=[captions]
+            fn=lambda caption, idx, caps, gallery: update_captions(caption, idx, caps, gallery),
+            inputs=[caption_display, selected_index_state, captions_state, image_gallery],
+            outputs=[captions_state]
         )
 
         # Update the index state when an image is selected in the gallery
-        image_gallery.select(
-            fn=lambda selected_image, image_paths: image_paths.index(selected_image[0]) if isinstance(selected_image, list) and selected_image[0] in image_paths else None,
-            inputs=[image_gallery, image_paths],
-            outputs=[gr.State(None)]
+        image_gallery.change(
+            fn=lambda idx: idx,
+            inputs=[image_gallery],
+            outputs=[selected_index_state]
         )
 
 # Release all models when the app is closed
