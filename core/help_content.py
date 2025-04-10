@@ -57,7 +57,7 @@ TOOLTIPS = {
     # --- Resource Management (Advanced) ---
     "opt_num_keep": "Number of tokens from prompt to always keep in context (-1=all).",
     "opt_num_batch": "Batch size for prompt processing. Adjust based on VRAM/model. May affect speed.",
-    "opt_num_gpu": "Number of GPU layers (-1 = auto). Requires Ollama built with GPU support. Affects speed/VRAM.",
+    "opt_num_gpu": "Number of GPU layers (999, lower for concurrent GPU use). Requires Ollama built with GPU support. Affects speed/VRAM.",
     "opt_main_gpu": "Index of primary GPU if multiple used.",
     "opt_low_vram": "Optimize for low VRAM GPUs. May reduce speed or context.",
     "opt_f16_kv": "Use 16-bit floats for KV cache. Saves memory, might affect precision slightly.",
