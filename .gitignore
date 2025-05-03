@@ -166,3 +166,5 @@ app_fullproject.txt
 *.pyc
 /__pycache__
 /__pycache__
+history.json
+/sweep_runs

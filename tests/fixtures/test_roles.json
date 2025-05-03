@@ -1,0 +1,9 @@
+{
+    "Tester": {
+        "description": "A test role.",
+        "ollama_api_options": { "temperature": 0.8, "top_k": 10 }
+    },
+    "NoOptionsRole": {
+         "description": "Another role."
+    }
+}

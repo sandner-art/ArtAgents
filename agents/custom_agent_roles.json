@@ -62,5 +62,14 @@
             "temperature": 0.9,
             "top_k": 15
         }
+    },
+    "Prompt Synthesizer": {
+            "description": "Your sole task is to synthesize the information provided in the context from previous steps into a single, coherent, and effective final output (e.g., an image generation prompt or a summary). Focus on clear structure, integration of details, and fulfilling the overall workflow goal described in the context. Do not add commentary about the process.",
+            "ollama_api_options": {
+                "temperature": 0.6, 
+                "top_k": 40,
+                "num_predict": 1024 
+            }
     }
+
 }
