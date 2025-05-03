@@ -27,7 +27,7 @@ This documentation is organized into the following sections:
 ## Additional Resources
 
 *   **[Main Project README](../README.md):** For a quick overview, installation steps, and development status, refer to the main README file in the project root.
-*   **[GitHub Repository](https://github.com/sandner-art/ArtAgent):** *(Replace with your actual repository link)* For the latest code, reporting issues, and suggesting features.
+*   **[GitHub Repository](https://github.com/sandner-art/ArtAgent):** For the latest code, reporting issues, and suggesting features.
 
 ---
 
