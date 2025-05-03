@@ -35,6 +35,21 @@
             }
         ]
     },
+    "Photo Test Team": {
+        "assembly_strategy": "refine_last",
+        "description": "Testing refine last type",
+        "steps": [
+            {
+                "role": "Bespoke Photographer"
+            },
+            {
+                "role": "Styler"
+            },
+            {
+                "role": "Prompt Synthesizer"
+            }
+        ]
+    },
     "Photorealistic Scene": {
         "assembly_strategy": "concatenate",
         "description": "Creates prompts for realistic scenes.",
@@ -54,6 +69,142 @@
             {
                 "goal": "Combine steps into a coherent scene prompt.",
                 "role": "Universal Prompter"
+            }
+        ]
+    },
+    "Test Team": {
+        "assembly_strategy": "refine_last",
+        "description": "Testing Team Functions",
+        "steps": [
+            {
+                "role": "Bespoke Fashionista"
+            },
+            {
+                "role": "Colorista"
+            },
+            {
+                "role": "Prompt Synthesizer"
+            }
+        ]
+    },
+
+    "Template - Concatenate Keywords": {
+        "assembly_strategy": "concatenate",
+        "description": "Adds distinct aspects (subject, style, details, composition) as keywords/phrases. Good for tag-based models (e.g., SDXL). Output order depends on step order.",
+        "manager_role": null,
+        "steps": [
+            {
+                "role": "Artist",
+                "goal": "Describe the core subject and overall mood in keywords or short phrases."
+            },
+            {
+                "role": "Styler",
+                "goal": "List relevant artistic styles, techniques, or visual treatments as keywords."
+            },
+            {
+                "role": "Detailer",
+                "goal": "Add specific keywords for textures, materials, or fine details."
+            },
+            {
+                "role": "Photographer",
+                "goal": "Provide keywords for camera angle, lighting style, and composition."
+            }
+        ]
+    },
+
+    "Template - Structured Concatenate": {
+        "assembly_strategy": "structured_concatenate",
+        "description": "Adds distinct aspects (subject, style, details, composition) with labels identifying the contributing agent/step. Useful for analysis or complex prompts.",
+        "manager_role": null,
+        "steps": [
+            {
+                "role": "Artist",
+                "goal": "Describe the core subject and overall mood concisely."
+            },
+            {
+                "role": "Styler",
+                "goal": "Identify and describe the primary artistic style and medium."
+            },
+            {
+                "role": "Detailer",
+                "goal": "Describe important textures, materials, and fine details."
+            },
+            {
+                "role": "Photographer",
+                "goal": "Describe the composition, camera angle, and lighting characteristics."
+            }
+        ]
+    },
+
+    "Template - Refine Last (Scene Focus)": {
+        "assembly_strategy": "refine_last",
+        "description": "Builds context step-by-step (Concept -> Composition -> Details) and uses the final agent to synthesize a polished prompt.",
+        "manager_role": null,
+        "steps": [
+            {
+                "role": "Artist",
+                "goal": "Establish the core scene concept, subject matter, and overall mood/atmosphere."
+            },
+            {
+                "role": "Photographer",
+                "goal": "Based on the concept, define the composition, camera viewpoint, lens type, and primary lighting approach."
+            },
+            {
+                "role": "Detailer",
+                "goal": "Add specific details about key elements, textures, materials, or background features mentioned in the context."
+            },
+            {
+
+                "role": "Prompt Synthesizer", 
+                "goal": "Synthesize all the information provided in the previous context steps into a single, coherent, and evocative image generation prompt. Ensure smooth integration of concept, composition, and details."
+            }
+        ]
+    },
+
+     "Template - Refine Last (Object Focus)": {
+        "assembly_strategy": "refine_last",
+        "description": "Builds context step-by-step (Style -> Form -> Details) for an object and uses the final agent to synthesize a polished prompt.",
+        "manager_role": null,
+        "steps": [
+            {
+                "role": "Styler",
+                "goal": "Define the overall aesthetic style (e.g., Art Deco, Cyberpunk, Minimalist) and any relevant artistic medium."
+            },
+            {
+                "role": "Designer",
+                "goal": "Describe the primary shapes, forms, and overall structure of the object based on the defined style."
+            },
+            {
+                "role": "Detailer",
+                "goal": "Add specific details about materials, textures, colors, surface finishes, and smaller components based on the form and style."
+            },
+            {
+                "role": "Prompt Synthesizer", 
+                "goal": "Synthesize all the information provided in the previous context steps (style, form, details) into a single, coherent, and detailed image generation prompt for the object."
+            }
+        ]
+    },
+
+    "Template - Summarize All": {
+        "assembly_strategy": "summarize_all",
+        "description": "Gathers descriptions of different aspects (Concept, Style, Color, Composition) and uses a final LLM call (implicit) to synthesize them into a coherent narrative or prompt.",
+        "manager_role": null,
+        "steps": [
+            {
+                "role": "Artist",
+                "goal": "Describe the core concept, subject, and action of the scene."
+            },
+            {
+                "role": "Styler",
+                "goal": "Describe the main artistic style, medium, and any specific techniques visible."
+            },
+             {
+                "role": "Colorista",
+                "goal": "Describe the overall color palette, mood evoked by the colors, and any dominant hues."
+            },
+            {
+                "role": "Photographer",
+                "goal": "Describe the composition, camera angle, and lighting setup."
             }
         ]
     }
