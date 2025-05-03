@@ -25,6 +25,8 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 *   **Persistent History:** Logs all single interactions and detailed workflow steps to `core/history.json`, viewable and clearable in the "Full History" tab.
 *   **Utilities:** Copy-to-clipboard for responses, optional prompt artifact cleaning, model release functions, contextual help tooltips, setup scripts.
 *   **Modular Codebase:** Organized structure (`core`, `agents`, `ui`) for maintainability.
+   
+![01-git2](https://github.com/user-attachments/assets/234496b9-b816-4053-bff1-a50518e619d1)
 
 ## Project Structure
 
@@ -128,9 +130,9 @@ ArtAgent/
 
 ## Documentation
 
-For more detailed information, please refer to the documents in the `/docs` directory:
-*   `/docs/user-guide.md` (Coming Soon)
-*   `/docs/architecture.md` (Coming Soon)
+For more detailed information, please refer to the [documents](docs/index.md) in the `/docs` directory:
+*   `/docs/user-guide.md` 
+*   `/docs/architecture.md` 
 
 ## Development Status & Plan
 
@@ -144,7 +146,6 @@ For more detailed information, please refer to the documents in the `/docs` dire
 *   Copy-to-clipboard button added.
 *   Consolidated "Info" tab implemented.
 *   Error handling reviewed and improved.
-Read more in [*Docs*](docs\index.md).
 
 **Phase 1: Foundational Expansion & Modernization (Current Focus)**
 
@@ -166,23 +167,11 @@ Read more in [*Docs*](docs\index.md).
 
 ## Contributing
 
-Contributions are welcome! Please refer to `CONTRIBUTING.md` for guidelines on reporting issues, suggesting features, or submitting pull requests.
+Contributions are welcome! Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, suggesting features, or submitting pull requests.
 
 ## License
 
 ArtAgents by Daniel Sandner © 2024 - 2025. Adapt and use creatively. No guarantees provided. [MIT LICENSE](LICENSE).
 
 ---
-[AI/ML Articles](https://sandner.art/)
-```
-
-**Summary of Changes:**
-
-*   Updated the overview and features list to reflect the current state accurately (Team Editor, Captioning, Sweep outputs, new strategies, cleaner, copy button, info tab).
-*   Adjusted the Project Structure to include `refinement_logic.py` and `info_tab.py`, removing `roles_tab.py`, and added the `/docs` directory.
-*   Clarified the Installation/Running steps regarding virtual environments (manual vs. scripts) and added a placeholder for Poetry.
-*   Updated the "Development Status & Plan" section: Marked Phase 0 as complete and listed the specific Phase 1 tasks. Updated the Future list.
-*   Added placeholders for Documentation, Contributing, and License sections for professionalism.
-*   Minor wording adjustments for clarity.
-
-This updated README should provide a good snapshot of the project before embarking on Phase 1.
+[sandner.art | AI/ML Articles](https://sandner.art/)
