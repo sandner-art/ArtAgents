@@ -100,7 +100,7 @@ ArtAgent/
 ## Installation & Setup
 
 1.  **Install Ollama:** Download and install from [ollama.com](https://ollama.com/). Ensure the `ollama` command is available in your terminal.
-2.  **Clone Repository:** `git clone <your-repository-url>` and navigate into the `ArtAgent` directory (`cd ArtAgent`).
+2.  **Clone Repository:** `git clone https://github.com/sandner-art/ArtAgents.git` and navigate into the `ArtAgent` directory (`cd ArtAgent`).
 3.  **Setup Python Environment (Recommended):**
     *   **Using Venv (Manual):** Create and activate a virtual environment (Python 3.9+ recommended, 3.10+ required for potential Gradio 5 upgrade).
         ```bash
