@@ -5,15 +5,17 @@ import os
 from PIL import Image # Ensure Image is imported
 import numpy as np
 import time
+# Removed re import as cleaning is now in utils
+# import re
 
 # Import necessary functions/classes from sibling modules or agents
-from .utils import load_json, get_absolute_path
+from .utils import load_json, get_absolute_path, clean_agent_artifacts # Import cleaner
 from . import history_manager as history
 from agents.roles_config import load_all_roles, get_role_display_name, get_actual_role_name
 from agents.ollama_agent import get_llm_response
 # Import ollama_manager to call release_model and agent_manager for workflows
 from . import ollama_manager
-from . import agent_manager # Import the new manager
+from . import agent_manager # Import the agent manager
 
 # --- Constants used by logic functions ---
 SETTINGS_FILE = 'settings.json'
@@ -45,6 +47,7 @@ def execute_chat_or_team(
     use_ollama_api_options, release_model_on_change,
     # UI Inputs (Specific)
     selected_role_or_team, # This dropdown now selects EITHER a role OR a team
+    clean_artifacts_flag: bool, # Flag from UI checkbox
     # State Inputs
     current_settings,
     models_data_state,
@@ -57,11 +60,13 @@ def execute_chat_or_team(
     ) -> tuple[str, str, str | None, list]: # Added type hints for return
     """
     Determines whether to run a single agent or an agent team workflow.
+    Applies artifact cleaning if requested using a utility function.
 
     Returns:
         tuple: (response_text, session_history_text, model_name_used_state, new_session_history_list)
     """
     print(f"\nExecuting chat/team with selection: '{selected_role_or_team}'")
+    print(f"  Clean Artifacts Flag: {clean_artifacts_flag}") # Log the flag value
     # Define return structure defaults
     response_text = "Error: Processing failed."
     session_history_text = "\n---\n".join(session_history_list_state)
@@ -83,32 +88,30 @@ def execute_chat_or_team(
             # Return immediately matching the 4-tuple signature
             return response_text, session_history_text, model_name_state_update, new_session_history_list
 
+    # --- Execute Workflow or Single Agent ---
     if is_team_workflow:
         team_definition = teams_data_state[team_name]
         print(f"Running Agent Team Workflow: '{team_name}'")
 
         # Reload all roles data to pass to the manager (includes file agents)
-        # Uses current_settings passed in from state
         all_roles_data = load_all_roles(current_settings, file_agents=file_agents_dict)
 
-        # Determine the worker model (currently the one selected in UI)
-        # Find actual model name from UI value (which might have '(VISION)' suffix)
+        # Determine the worker model
         worker_model_name = None
-        if not models_data_state: # Check if model data is available
-             return "Error: Models data state is missing.", session_history_text, None, new_session_history_list
+        if not models_data_state:
+             response_text = "Error: Models data state is missing."
+             return response_text, session_history_text, None, new_session_history_list
         for m in models_data_state:
             m_name = m.get("name")
             if not m_name: continue
-            # Use model_with_vision passed to this function
             if m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision:
                 worker_model_name = m_name
                 break
         if not worker_model_name:
-             # If called from captioning, model_with_vision might be None, try agent default? No, captioning passes model now.
-             return f"Error: Could not determine worker model name for team from input '{model_with_vision}'.", session_history_text, None, new_session_history_list
+             response_text = f"Error: Could not determine worker model name for team from input '{model_with_vision}'."
+             return response_text, session_history_text, None, new_session_history_list
 
         # Call the Agent Manager's workflow execution function
-        # It returns the final output string, the *updated persistent history list*, and intermediate steps (or None)
         final_output, updated_persistent_history_list, _ = agent_manager.run_team_workflow(
             team_name=team_name,
             team_definition=team_definition,
@@ -117,7 +120,7 @@ def execute_chat_or_team(
             all_roles_data=all_roles_data,
             history_list=list(history_list_state), # Pass copy of persistent history
             worker_model_name=worker_model_name,
-            # TODO: Handle images if team workflow needs them (requires passing single_image_input)
+            single_image_input=single_image_input, # Pass image if workflow handles it
         )
         # Persistent history state update is implicit via history.add_to_history inside manager
 
@@ -140,7 +143,6 @@ def execute_chat_or_team(
         # --- Assume it's a Single Agent Call ---
         print(f"Running Single Agent: '{selected_role_or_team}'")
         # Call the chat_logic function defined below
-        # It returns: response_text, session_history_text, model_name, new_session_list
         response_text, session_history_text, model_name_state_update, new_session_history_list = chat_logic(
             # Pass all necessary arguments (including selected_role_or_team as role_display_name)
             folder_path=folder_path,
@@ -162,12 +164,25 @@ def execute_chat_or_team(
             session_history_list_state=session_history_list_state # Pass current session list
         )
 
-    # Return values matching the Gradio outputs binding for the submit button
+    # --- APPLY ARTIFACT CLEANING using utility function ---
+    if clean_artifacts_flag and isinstance(response_text, str) and not response_text.startswith("Error:") and not response_text.startswith("⚠️ Error:"):
+        original_text = response_text # Keep original for comparison
+        # Call the utility function
+        cleaned_text = clean_agent_artifacts(response_text)
+        # Check if cleaning changed the text
+        if original_text != cleaned_text:
+             print("  Applied artifact cleaning to final response.")
+             response_text = cleaned_text # Use the cleaned text
+        # else: print("  Artifact cleaning applied, but no changes detected.")
+
+
+    # --- Return final values ---
+    # Note: History logging happens within the called functions (chat_logic/run_team_workflow)
+    # and currently logs the raw output before cleaning.
     return response_text, session_history_text, model_name_state_update, new_session_history_list
 
 
 # --- Single Agent Chat Logic ---
-# CORRECTED to handle PIL Image input
 def chat_logic(
     # UI Inputs
     folder_path, role_display_name, user_input, model_with_vision, max_tokens_ui,
@@ -233,7 +248,6 @@ def chat_logic(
     # Check if input is not None and if the selected model supports vision
     if single_image_input is not None and model_info.get("vision"):
         # Check if input is already a PIL Image (coming from captioning logic)
-        # Use PIL.Image directly for the check
         if isinstance(single_image_input, Image.Image):
             print("  Processing PIL Image input.")
             pil_images_list = [single_image_input]
@@ -250,7 +264,6 @@ def chat_logic(
             except Exception as e:
                 return f"Error processing single numpy image: {e}", "\n---\n".join(current_session_history), model_name, current_session_history
         else:
-            # Handle unexpected input type if necessary
             print(f"Warning: Received single image input of unexpected type: {type(single_image_input)}. Ignoring.")
 
     elif single_image_input is not None and not model_info.get("vision"):
@@ -259,13 +272,13 @@ def chat_logic(
     # --- End Revised Image Handling ---
 
     # --- Add Debug Print for final arguments to ollama_agent ---
-    print(f"DEBUG CHAT_LOGIC: Calling get_llm_response with:")
-    print(f"  Role: {actual_role_name}")
-    print(f"  Model: {model_name}")
-    print(f"  Prompt Start: {prompt[:150]}...")
-    print(f"  Images Type: {type(pil_images_list)}, Count: {len(pil_images_list)}")
-    if pil_images_list: print(f"  First Image Type in list: {type(pil_images_list[0])}")
-    print(f"  Max Tokens: {effective_max_tokens}")
+    # print(f"DEBUG CHAT_LOGIC: Calling get_llm_response with:")
+    # print(f"  Role: {actual_role_name}")
+    # print(f"  Model: {model_name}")
+    # print(f"  Prompt Start: {prompt[:150]}...")
+    # print(f"  Images Type: {type(pil_images_list)}, Count: {len(pil_images_list)}")
+    # if pil_images_list: print(f"  First Image Type in list: {type(pil_images_list[0])}")
+    # print(f"  Max Tokens: {effective_max_tokens}")
     # --- End Debug Print ---
 
     # 5. Determine Mode and Call Agent
@@ -274,21 +287,20 @@ def chat_logic(
     entry_prefix = f"Timestamp: {timestamp}\nRole: {actual_role_name}\nModel: {model_name}\nInput: {user_input}"
 
     if is_single_image_mode:
-         # Single Image Call (PIL object is now in pil_images_list)
+         # Single Image Call
          print(f"Calling agent (Single Image): model={model_name}, role={actual_role_name}, image_source={image_source_info}")
          final_response = get_llm_response(
              role=actual_role_name, prompt=prompt, model=model_name, settings=current_settings,
              roles_data=roles_data_current, images=pil_images_list, max_tokens=effective_max_tokens,
              ollama_api_options=agent_ollama_options
          )
-         # Replace potential base64 data with placeholder for history log display
          log_image_source_info = "[Image Data Sent]" if pil_images_list else image_source_info
          entry = f"{entry_prefix}\nImage: {log_image_source_info}\nResponse:\n{final_response}\n---\n"
          history_list = history.add_to_history(history_list, entry) # Updates persistent
          current_session_history.append(entry) # Updates session list copy
 
     elif folder_path and os.path.isdir(folder_path):
-        # Folder Processing Call (Existing logic)
+        # Folder Processing Call
         if not model_info.get("vision"):
              print("Warning: Folder path provided, but model lacks vision. Processing text-only.")
              final_response = get_llm_response(
@@ -339,25 +351,22 @@ def chat_logic(
 
                       # Decide action based on mode and existence
                       if file_handling_option == "Overwrite" or not file_exists:
-                          if img_response: # Only write if response is not empty
-                              with open(output_file, 'w', encoding='utf-8') as f:
-                                  f.write(img_response)
+                          if img_response and not img_response.startswith("⚠️ Error:"):
+                              with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response)
                               action_taken = "Written" if not file_exists else "Overwritten"
-                          else: action_taken = "Skipped (Empty Response)"
+                          else: action_taken = "Skipped (Empty/Error Response)"
                       elif file_handling_option == "Append":
-                          if img_response:
+                          if img_response and not img_response.startswith("⚠️ Error:"):
                               separator = "\n\n---\n\n" if original_content else ""
-                              with open(output_file, 'w', encoding='utf-8') as f:
-                                  f.write(original_content + separator + img_response)
+                              with open(output_file, 'w', encoding='utf-8') as f: f.write(original_content + separator + img_response)
                               action_taken = "Appended"
-                          else: action_taken = "Skipped (Empty Response)"
+                          else: action_taken = "Skipped (Empty/Error Response)"
                       elif file_handling_option == "Prepend":
-                          if img_response:
+                          if img_response and not img_response.startswith("⚠️ Error:"):
                               separator = "\n\n---\n\n" if original_content else ""
-                              with open(output_file, 'w', encoding='utf-8') as f:
-                                  f.write(img_response + separator + original_content)
+                              with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response + separator + original_content)
                               action_taken = "Prepended"
-                          else: action_taken = "Skipped (Empty Response)"
+                          else: action_taken = "Skipped (Empty/Error Response)"
                       # Skip case is handled by default action_taken="Skipped"
 
                       # --- End File Handling ---
@@ -395,45 +404,42 @@ def chat_logic(
 
 
     # Return response text, session history text, model name, and updated session list
+    # Cleaning happens in execute_chat_or_team router
     return final_response, "\n---\n".join(current_session_history), model_name, current_session_history
 
+# --- Callback for Copy JS ---
+def trigger_copy_js(text_to_copy):
+    """
+    Returns a JavaScript string that copies the provided text to the clipboard
+    when executed by the Gradio frontend via gr.update().
+    Includes basic escaping for embedding within a JS template literal.
+    """
+    if not text_to_copy:
+        print("Copy Button: No text provided to copy.")
+        return gr.update(value="<script>console.warn('Copy button: No text provided.');</script>")
 
-# --- Comment Logic ---
-def comment_logic(
-    llm_response_text, comment, max_tokens_ui,
-    use_ollama_api_options,
-    model_state_value, current_settings, file_agents_dict,
-    history_list_state, session_history_list_state
-    ) -> tuple[str, str, list]:
-    """Handles the commenting logic."""
-    history_list = list(history_list_state)
-    current_session_history = list(session_history_list_state)
+    # Escape backticks, backslashes, and `${}` sequences needed for JS template literals
+    escaped_text = text_to_copy.replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${')
 
-    if not comment or not model_state_value:
-        print("Comment ignored: No comment text or model state.")
-        # Return unchanged values, matching output signature (3 values)
-        return llm_response_text, "\n---\n".join(current_session_history), current_session_history
-
-    # Use settings PASSED IN
-    roles_data_current = load_all_roles(current_settings, file_agents=file_agents_dict)
-    print(f"Processing comment on model {model_state_value}...")
-    role = "User"; role_description = roles_data_current.get(role, {}).get("description", "Follow up based on comment.")
-    prompt = f"Previous Response:\n{llm_response_text}\n\nUser Comment/Instruction:\n{comment}\n\nPlease revise or continue based on the comment."
-    agent_ollama_options = {} # Agent handles merging
-
-    response = get_llm_response(
-        role=role, prompt=prompt, model=model_state_value, settings=current_settings,
-        roles_data=roles_data_current, images=None, max_tokens=max_tokens_ui,
-        ollama_api_options=agent_ollama_options
-    )
-
-    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    entry = f"Timestamp: {timestamp}\nRole: {role} (Comment)\nModel: {model_state_value}\nInput: {comment}\nContext: Previous response\nResponse:\n{response}\n---\n"
-    history_list = history.add_to_history(history_list, entry)
-    current_session_history.append(entry)
-
-    # Return new response text, new session history text, and new session history list
-    return response, "\n---\n".join(current_session_history), current_session_history
+    # Construct the JavaScript code string
+    copy_js_code = f"""
+<script>
+    (async () => {{
+        const textToCopy = `{escaped_text}`; // Use template literal with escaped text
+        try {{
+            await navigator.clipboard.writeText(textToCopy);
+            console.log('Text copied to clipboard successfully!');
+            // Example feedback (requires button ID 'copy-response-button-id' - not set currently)
+            // const btn = document.getElementById('copy-response-button-id');
+            // if(btn) {{ btn.textContent = 'Copied!'; setTimeout(() => {{ btn.textContent = '📋 Copy'; }}, 1500); }}
+        }} catch (err) {{
+            console.error('Failed to copy text to clipboard: ', err);
+        }}
+    }})(); // Immediately invoke the async function
+</script>
+"""
+    # Return the JS wrapped in gr.update targeting the dummy HTML component
+    return gr.update(value=copy_js_code)
 
 
 # --- UI Callbacks ---
@@ -448,13 +454,10 @@ def update_max_tokens_on_limiter_change(limiter_choice, current_max_tokens_value
     if limiter_token_val is not None:
          try:
              limiter_token_int = int(limiter_token_val)
-             # Slider value might be float, handle potential conversion errors
-             try:
-                 current_max_tokens_int = int(float(current_max_tokens_value))
+             try: current_max_tokens_int = int(float(current_max_tokens_value))
              except (ValueError, TypeError):
                  print(f"Warning: Could not convert current max_tokens slider value '{current_max_tokens_value}' to int.")
-                 return gr.update() # Don't update if current value is invalid
-
+                 return gr.update()
              if limiter_token_int != current_max_tokens_int:
                   print(f"Limiter '{limiter_choice}' updating max_tokens slider to: {limiter_token_int}")
                   return gr.update(value=limiter_token_int)
@@ -465,22 +468,14 @@ def update_max_tokens_on_limiter_change(limiter_choice, current_max_tokens_value
 def clear_session_history_callback(session_history_list_state):
     """Clears the session history list state."""
     print("Session history cleared.")
-    # Returns empty string for display, and empty list for the state
     return "", [] # Match outputs = [display, state]
-
-
-# This callback's logic is now handled by the WRAPPER in app.py
-# def update_role_dropdown_callback(use_default, use_custom, file_agents_dict, teams_data_state, current_settings_dict):
-#     pass
 
 
 def handle_agent_file_upload(uploaded_file):
     """Processes uploaded agent JSON file. Returns dict, filename, update obj for dropdown."""
     if uploaded_file is None:
         print("Agent file upload cleared.")
-        # Needs to return 3 values matching outputs list in app.py upload handler
-        # The third value signals Gradio to run the .then() chain
-        return {}, None, gr.update()
+        return {}, None, gr.update() # Return update obj to trigger .then()
 
     try:
         file_path = uploaded_file.name; file_basename = os.path.basename(file_path)
@@ -497,8 +492,7 @@ def handle_agent_file_upload(uploaded_file):
         if not valid_agents: raise ValueError("No valid agent definitions found.")
         print(f"Successfully loaded {len(valid_agents)} agent(s) from {file_basename}.")
         # Return loaded dict, base filename, and trigger dropdown update via .then()
-        # IMPORTANT: Return the update object directly
-        return valid_agents, file_basename, gr.Dropdown.update()
+        return valid_agents, file_basename, gr.Dropdown.update() # Return update obj
     except (json.JSONDecodeError, ValueError) as e: error_msg = f"Invalid Agent File: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
     except Exception as e: error_msg = f"Error processing agent file: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
 
@@ -508,7 +502,7 @@ def load_profile_options_callback(profile_name_to_load, all_profiles_data_state,
     print(f"Loading profile: {profile_name_to_load}")
     ordered_keys = ordered_option_keys_state
     num_outputs = len(ordered_keys) if ordered_keys else 0
-    no_change_updates = [gr.update() for _ in range(num_outputs)] # Create list of no-op updates
+    no_change_updates = [gr.update() for _ in range(num_outputs)]
 
     if not profile_name_to_load or not all_profiles_data_state or not ordered_keys:
         print("Cannot load profile: Missing profile name, data, or ordered keys.")
@@ -523,13 +517,11 @@ def load_profile_options_callback(profile_name_to_load, all_profiles_data_state,
     for key in ordered_keys:
         if key in profile_options:
             new_value = profile_options[key]
-            print(f"  Updating '{key}' UI to: {new_value}")
+            # print(f"  Updating '{key}' UI to: {new_value}") # Reduce verbosity
             updates_list.append(gr.update(value=new_value))
         else:
-            # Send no-change update if key not in profile
-            updates_list.append(gr.update())
+            updates_list.append(gr.update()) # Send no-change update
 
-    # Safety check
     if len(updates_list) != num_outputs:
          print(f"Error: Mismatch generating profile updates. Expected {num_outputs}, got {len(updates_list)}.")
          return no_change_updates
@@ -550,7 +542,6 @@ def save_settings_callback(
     print("Saving application settings...")
     try:
         settings_path = get_absolute_path(SETTINGS_FILE)
-        # Use load_json which handles errors and returns dict
         current_settings = load_json(settings_path, is_relative=False)
         if not isinstance(current_settings, dict): current_settings = {}
 
@@ -563,27 +554,25 @@ def save_settings_callback(
             "release_model_on_change": release_model_default_in, "gradio_theme": theme_select_in
         })
         # Update ollama_api_options
-        current_settings["ollama_api_options"] = current_settings.get("ollama_api_options", {}) # Ensure exists
+        current_settings["ollama_api_options"] = current_settings.get("ollama_api_options", {})
         ordered_keys = ordered_option_keys_state
         num_expected = len(ordered_keys); num_received = len(api_option_values)
-        # Reload initial options just before saving to get original types accurately
         initial_options_for_types = load_json(settings_path, is_relative=False).get("ollama_api_options", {})
 
         if ordered_keys and num_expected == num_received:
-            api_options_updates = current_settings["ollama_api_options"].copy() # Work on a copy
+            api_options_updates = current_settings["ollama_api_options"].copy()
             for key, value in zip(ordered_keys, api_option_values):
                 original_value = initial_options_for_types.get(key)
-                try: # Attempt type conversion
-                    # Check explicit types first for safer conversion
+                try:
                     if isinstance(original_value, bool): api_options_updates[key] = bool(value)
                     elif isinstance(original_value, int): api_options_updates[key] = int(value)
                     elif isinstance(original_value, float): api_options_updates[key] = float(value)
-                    else: api_options_updates[key] = value # Save as received type otherwise
+                    else: api_options_updates[key] = value
                 except (ValueError, TypeError) as e:
                     print(f"Warning: Could not convert saved value '{value}' for option '{key}' based on original type {type(original_value)}. Saving as received. Error: {e}")
                     api_options_updates[key] = value
-            current_settings["ollama_api_options"] = api_options_updates # Assign updated dict
-            print(f" Ollama API options updated ({num_expected} values).")
+            current_settings["ollama_api_options"] = api_options_updates
+            # print(f" Ollama API options updated ({num_expected} values).") # Reduce verbosity
         elif not ordered_keys and num_received == 0:
              print("No API options defined or received, skipping update.")
         else: print(f"Warning: API Options count mismatch ({num_expected} vs {num_received}). Options NOT saved.")
@@ -605,17 +594,14 @@ def load_team_for_editing(team_name_to_load, all_teams_data_state):
     print(f"Loading team '{team_name_to_load}' into editor.")
     empty_state = {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
     if not team_name_to_load or not all_teams_data_state:
-        # Clear editor if no team selected
         return "", "", [], "concatenate", empty_state
 
     team_data = all_teams_data_state.get(team_name_to_load)
     if not team_data or not isinstance(team_data, dict):
         print(f"Error: Team data not found or invalid for '{team_name_to_load}'.")
         error_state = {"name": team_name_to_load, "description": "Error: Team data not found.", "steps": [], "assembly_strategy": "concatenate"}
-        # Match the 5 return values expected by the UI binding
         return team_name_to_load, "Error: Team data not found.", [], "concatenate", error_state
 
-    # Ensure steps is always a list, even if missing/null in JSON
     steps = team_data.get("steps", [])
     if not isinstance(steps, list): steps = []
 
@@ -625,19 +611,14 @@ def load_team_for_editing(team_name_to_load, all_teams_data_state):
         "steps": steps,
         "assembly_strategy": team_data.get("assembly_strategy", "concatenate")
     }
-    print(f" Loaded: {editor_state}")
-    # Outputs: name_tb, desc_tb, steps_json, strategy_radio, editor_state
-    return (
-        editor_state["name"], editor_state["description"],
-        editor_state["steps"], editor_state["assembly_strategy"], editor_state
-    )
+    # print(f" Loaded: {editor_state}") # Reduce verbosity
+    return ( editor_state["name"], editor_state["description"], editor_state["steps"], editor_state["assembly_strategy"], editor_state )
 
 
 def clear_team_editor():
     """Clears the editor fields for creating a new team."""
     print("Clearing team editor.")
     empty_state = {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
-    # Outputs: name_tb, desc_tb, steps_json, strategy_radio, editor_state
     return "", "", [], "concatenate", empty_state
 
 
@@ -645,108 +626,89 @@ def add_step_to_editor(agent_role_display_name_to_add, current_editor_state):
     """Adds the selected agent as a new step to the current editor state."""
     if not agent_role_display_name_to_add:
         print("Add Step: No agent selected."); gr.Warning("Please select an agent role to add.")
-        # Return state and no-update for JSON display
         return current_editor_state, gr.update()
 
-    # Ensure state is a dictionary, default if not
     editor_state = current_editor_state.copy() if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
+    if "steps" not in editor_state or not isinstance(editor_state["steps"], list): editor_state["steps"] = []
 
-    if "steps" not in editor_state or not isinstance(editor_state["steps"], list):
-        editor_state["steps"] = []
-
-    actual_role_name = get_actual_role_name(agent_role_display_name_to_add) # Use actual name
-    new_step = {"role": actual_role_name} # Add goal later if UI exists
+    actual_role_name = get_actual_role_name(agent_role_display_name_to_add)
+    new_step = {"role": actual_role_name}
     editor_state["steps"].append(new_step)
     print(f"Add Step: Added '{actual_role_name}'. Steps: {len(editor_state['steps'])}")
-    # Outputs: editor_state, steps_json_display
     return editor_state, editor_state["steps"]
 
 
 def remove_step_from_editor(step_index_to_remove, current_editor_state):
     """Removes a step at the specified index (1-based) from the editor state."""
-    # Ensure state is a dictionary
     editor_state = current_editor_state.copy() if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
     steps = editor_state.get("steps", [])
-    if not isinstance(steps, list): steps = [] # Ensure list
+    if not isinstance(steps, list): steps = []
 
-    try: # Validate index
+    try:
         index_0_based = int(step_index_to_remove) - 1
-        if not (0 <= index_0_based < len(steps)): # Check bounds concisely
-            raise IndexError
+        if not (0 <= index_0_based < len(steps)): raise IndexError
     except (ValueError, TypeError, IndexError):
         msg = f"Invalid step number '{step_index_to_remove}' (must be 1 to {len(steps)})."
         print(f"Remove Step: {msg}"); gr.Warning(msg)
-        # Return state and no-update for JSON display
         return editor_state, gr.update()
 
     removed_step = steps.pop(index_0_based);
-    editor_state["steps"] = steps # Update steps in the state copy
+    editor_state["steps"] = steps
     print(f"Remove Step: Removed step {step_index_to_remove} ('{removed_step.get('role')}'). Steps: {len(steps)}")
-    # Outputs: editor_state, steps_json_display
     return editor_state, editor_state["steps"]
 
 
-# --- save_team_from_editor: Adjustments needed to return 5 outputs ---
 def save_team_from_editor(
-    # Current editor UI values
     team_name_in, description_in, assembly_strategy_in,
-    # State values
-    current_editor_state, # Contains the steps list
-    all_teams_data_state,
-    current_settings_state, # Needed for reloading roles for dropdown update
-    file_agents_dict_state  # Needed for reloading roles for dropdown update
-    ) -> tuple[dict, dict, dict, dict, str]: # Added return type hint matching 5 outputs
-    """Saves the team currently defined in the editor fields. Returns 5 values."""
+    current_editor_state, all_teams_data_state,
+    current_settings_state, file_agents_dict_state
+    ) -> tuple[dict, dict, dict, dict, str]:
+    """Saves the team currently defined in the editor fields."""
     print("Attempting to save team...")
     team_name = team_name_in.strip()
-    # Define default outputs for 5 return values
     default_outputs = [all_teams_data_state, gr.update(), gr.update(), gr.update(), "Save failed."]
 
     if not team_name: msg = "Team Name cannot be empty."; print(msg); gr.Error(msg); return default_outputs[0:4] + [msg]
 
     steps = current_editor_state.get("steps", [])
-    if not steps: msg = f"Save Warning: Team '{team_name}' has no steps."; print(msg); gr.Warning(msg) # Allow save
+    if not steps: msg = f"Save Warning: Team '{team_name}' has no steps."; print(msg); gr.Warning(msg)
 
     all_teams_data = all_teams_data_state.copy() if isinstance(all_teams_data_state, dict) else {}
     team_data = {"description": description_in.strip(), "steps": steps, "assembly_strategy": assembly_strategy_in}
-    all_teams_data[team_name] = team_data # Add or overwrite
+    all_teams_data[team_name] = team_data
 
     if save_teams_to_file(all_teams_data):
         msg = f"Team '{team_name}' saved successfully."
         print(msg)
-        # Reload roles using current settings and file agents state
+        # Reload roles/teams for dropdown updates
         combined_roles = load_all_roles(current_settings_state, file_agents=file_agents_dict_state)
         file_agent_keys = list(file_agents_dict_state.keys()) if file_agents_dict_state else []
         role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
         new_team_choices = sorted(list(all_teams_data.keys()))
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
-        # Outputs: teams_data_state, editor_team_dd, chat_role_dd, caption_agent_dd, status_textbox # FIXED
         return (
             all_teams_data,
             gr.Dropdown.update(choices=new_team_choices, value=team_name),
             gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
-            gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"), # Update caption DD too
+            gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
             msg
         )
     else:
         msg = f"Error: Failed to save team data."; print(msg); gr.Error(msg)
-        return default_outputs[0:4] + [msg] # Return original state, update status
+        return default_outputs[0:4] + [msg]
 
-# --- delete_team_logic: Adjustments needed to return 10 outputs ---
+
 def delete_team_logic(
-    team_name_to_delete,
-    all_teams_data_state,
-    current_settings_state, # Needed for reloading roles for dropdown update
-    file_agents_dict_state  # Needed for reloading roles for dropdown update
-    ) -> tuple[dict, dict, dict, dict, str, str, str, list, str, dict]: # Added return type hint matching 10 outputs
-    """Deletes the selected team. Returns 10 values."""
+    team_name_to_delete, all_teams_data_state,
+    current_settings_state, file_agents_dict_state
+    ) -> tuple[dict, dict, dict, dict, str, str, str, list, str, dict]:
+    """Deletes the selected team."""
     print(f"Attempting to delete team: '{team_name_to_delete}'")
-    # Define default clear values and no-change outputs for 10 returns
     clear_name, clear_desc, clear_steps, clear_strat, clear_state = clear_team_editor()
     no_change_outputs = [
-        all_teams_data_state, gr.update(), gr.update(), gr.update(), # States/DDs
-        "Delete failed.", # Status
-        clear_name, clear_desc, clear_steps, clear_strat, clear_state # Clear outputs
+        all_teams_data_state, gr.update(), gr.update(), gr.update(),
+        "Delete failed.",
+        clear_name, clear_desc, clear_steps, clear_strat, clear_state
     ]
 
     if not team_name_to_delete:
@@ -768,18 +730,16 @@ def delete_team_logic(
         role_display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
         new_team_choices = sorted(list(all_teams_data.keys()))
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
-        # Return updates: teams_state, editor_dd, chat_dd, caption_dd, status_msg, + clear outputs # FIXED
         return (
             all_teams_data,
             gr.Dropdown.update(choices=new_team_choices, value=None),
             gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"),
-            gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"), # Update caption DD too
+            gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"),
             msg,
             clear_name, clear_desc, clear_steps, clear_strat, clear_state
         )
     else:
         msg = f"Error: Failed to save teams after deletion."; print(msg); gr.Error(msg)
-        # Don't update state/dropdowns if save failed, just status and editor clear
         return no_change_outputs[0:4] + [msg] + no_change_outputs[5:]
 
 
@@ -790,5 +750,4 @@ def clear_full_history_callback(history_list_state):
     """Clears the persistent history file and returns updates."""
     print("Full history file cleared.")
     history.save_history([]) # Save empty list via manager
-    # Return empty string for display, hide group, empty list for state
     return "", hide_clear_confirmation(), [] # Match outputs

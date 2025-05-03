@@ -2,32 +2,28 @@
 import json
 import os
 import gradio as gr # Needed for theme mapping
+import re # <--- Add regex import
 
 # --- Determine Project Root ---
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def get_absolute_path(relative_path):
     """Constructs an absolute path from a path relative to the project root."""
-    # Ensure the input path uses OS-specific separators if needed, though os.path.join handles it
-    # path_parts = relative_path.split('/') # Use forward slash as standard?
-    # return os.path.join(PROJECT_ROOT, *path_parts)
-    # Simpler: os.path.join handles mixed separators too
     return os.path.join(PROJECT_ROOT, relative_path)
 
 def save_json(filepath, data, is_relative=False):
     """Saves data to a JSON file. Handles relative paths."""
     full_path = get_absolute_path(filepath) if is_relative else filepath
     try:
-        # Ensure parent directory exists
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False) # Use indent=2 for protocols
-        print(f"Successfully saved JSON to {full_path}")
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        # print(f"Successfully saved JSON to {full_path}") # Reduced verbosity
         return True
     except Exception as e:
         print(f"ERROR saving JSON to {full_path}: {e}")
         return False
-    
+
 def load_json(file_path, is_relative=True):
     """
     Loads a JSON file. Handles relative paths from project root.
@@ -42,12 +38,15 @@ def load_json(file_path, is_relative=True):
     full_path = get_absolute_path(file_path) if is_relative else file_path
 
     if not os.path.exists(full_path):
-        print(f"Warning: File not found {full_path}. Returning empty dict.")
+        # Reduced warning severity, file might not exist yet
+        # print(f"Warning: File not found {full_path}. Returning empty dict.")
         return {}
 
     try:
         with open(full_path, 'r', encoding='utf-8') as file:
             content = file.read().strip()
+            # Return {} or [] based on expected type if file is empty or only whitespace?
+            # For simplicity, returning {} which works for most current loads.
             if not content:
                 return {}
             return json.loads(content)
@@ -58,15 +57,39 @@ def load_json(file_path, is_relative=True):
         print(f"Error reading {full_path}: {e}. Returning empty dict.")
         return {}
 
+# --- >>> NEW FUNCTION: Artifact Cleaner <<< ---
+def clean_agent_artifacts(text: str) -> str:
+    """
+    Removes agent output headers (e.g., --- Output from Agent: ... ---)
+    from the beginning of lines in a text string.
+
+    Args:
+        text (str): The input text possibly containing artifacts.
+
+    Returns:
+        str: The cleaned text.
+    """
+    if not isinstance(text, str):
+        return text # Return input as is if not a string
+
+    try:
+        # Regex to find the header pattern at the start of a line (^)
+        # including leading/trailing whitespace (\s*) and the optional newline (\n?)
+        # Uses re.MULTILINE flag.
+        cleaned_text = re.sub(r"^\s*--- Output from Agent:.*?---\s*\n?", "", text, flags=re.MULTILINE)
+        return cleaned_text.strip() # Strip leading/trailing whitespace overall
+    except Exception as e:
+        print(f"Warning: Error during artifact cleaning regex: {e}")
+        return text.strip() # Return stripped original text on regex error
+# --- <<< END NEW FUNCTION >>> ---
+
+
 # --- Theme Mapping ---
-# Keep theme mapping separate for clarity
 AVAILABLE_THEMES = {
     "Default": gr.themes.Default(),
     "Soft": gr.themes.Soft(),
     "Monochrome": gr.themes.Monochrome(),
     "Glass": gr.themes.Glass(),
-    # Add custom themes here if defined elsewhere
-    # "MyCustom": my_custom_theme_object
 }
 
 def get_theme_object(theme_name: str):
@@ -76,10 +99,11 @@ def get_theme_object(theme_name: str):
 
 def format_json_to_html_table(data):
     """Formats a dictionary (like agent roles) into an HTML table."""
-    # --- (Keep existing implementation as before) ---
     if not isinstance(data, dict):
         return "<p>Invalid data format for table generation.</p>"
+    # --- (Implementation remains the same) ---
     html = "<table style='width:100%; border-collapse: collapse; border: 1px solid #ddd;'>"
+    # ... (rest of table generation code)
     html += "<thead><tr>"
     html += "<th style='border: 1px solid #ddd; padding: 8px; text-align: left;'>Agent/Key</th>"
     html += "<th style='border: 1px solid #ddd; padding: 8px; text-align: left;'>Description/Value</th>"

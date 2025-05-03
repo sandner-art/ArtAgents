@@ -76,6 +76,13 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
                                value=initial_settings.get("release_model_on_change", False),
                                info=get_tooltip("release_model") # Add tooltip
                           )
+                          # --- Cleaner Checkbox ---
+                          clean_prompt_artifacts = gr.Checkbox(
+                              label="Clean Prompt Artifacts (e.g., '--- Output from...') [Experimental]",
+                              value=False, # Default to False
+                              info="If checked, attempts to remove agent output headers from the final response."
+                          )
+                          # --- End Cleaner Checkbox ---
                      with gr.Row():
                           agent_file_upload = gr.File(
                                label="Load Agents from .json File (Session Only)",
@@ -85,7 +92,6 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
                           loaded_agent_file_display = gr.Textbox(
                                label="Loaded File", interactive=False, scale=1
                           )
-                     # Add markdown help inside accordion for file format
                      gr.Markdown(get_markdown("agent_file_format"))
 
 
@@ -96,8 +102,16 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
 
         with gr.Row():
              with gr.Column(scale=2):
-                 gr.Markdown("### LLM Response")
-                 llm_response_display = gr.Textbox(label="Response Output", lines=15, interactive=False, elem_id="llm_response")
+                 # --- Row for Response Label + Copy Button ---
+                 with gr.Row():
+                     gr.Markdown("### LLM Response", scale=10) # Give label more space
+                     copy_response_button = gr.Button("📋 Copy", variant="tool", scale=1) # Use tool variant, small scale
+                 # --- End Row ---
+                 llm_response_display = gr.Textbox(
+                     # Label removed as it's now in the Markdown header above
+                     lines=15, interactive=False,
+                     elem_id="llm_response" # Assign elem_id for JS access
+                 )
                  comment_input = gr.Textbox(
                       label="Enter Comment / Refinement", lines=2,
                       placeholder="Type your follow-up instruction here...", elem_id="comment_input",
@@ -108,6 +122,11 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
                  current_session_history_display = gr.Textbox(
                       label="Current Session Log", lines=20, interactive=False, elem_id="session_history"
                  )
+
+        # --- Dummy HTML for JS Execution ---
+        js_trigger_output = gr.HTML(visible=False, value="<!-- JS Trigger -->")
+        # --- End Dummy HTML ---
+
 
     # Return dictionary of key components and states needed by app.py
     return {
@@ -122,14 +141,17 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
         "max_tokens_slider": max_tokens_slider,
         "use_ollama_api_options": use_ollama_api_options,
         "release_model_on_change": release_model_on_change,
+        "clean_prompt_artifacts": clean_prompt_artifacts, # <-- Added checkbox
         "agent_file_upload": agent_file_upload,
         "loaded_agent_file_display": loaded_agent_file_display,
         "submit_button": submit_button,
         "comment_button": comment_button,
         "clear_session_button": clear_session_button,
         "llm_response_display": llm_response_display,
+        "copy_response_button": copy_response_button, # <-- Added button
         "comment_input": comment_input,
         "current_session_history_display": current_session_history_display,
+        "js_trigger_output": js_trigger_output, # <-- Added dummy HTML output
         # States used by this tab's logic or passed between callbacks
         "selected_model_tracker": selected_model_tracker,
         "model_state": model_state,

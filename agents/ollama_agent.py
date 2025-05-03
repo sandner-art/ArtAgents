@@ -37,7 +37,7 @@ def get_llm_response(
         ollama_api_options (dict, optional): Options to directly override/merge settings. Defaults to None.
 
     Returns:
-        str: The LLM response string, or an error message string.
+        str: The LLM response string, or an error message string prefixed with '⚠️ Error:'.
     """
 
     ollama_url = settings.get("ollama_url", "http://localhost:11434/api/generate")
@@ -98,7 +98,7 @@ def get_llm_response(
                     img_object.save(buffered, format=save_format)
                     img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
                     image_data.append(img_str)
-                    print(f"  Processed image {i+1} ({save_format}, size: {len(img_str)} bytes)")
+                    # print(f"  Processed image {i+1} ({save_format}, size: {len(img_str)} bytes)") # Reduce verbosity
                 else:
                     print(f"Warning: Item {i+1} in images list is not a PIL Image object, skipping.")
             if image_data:
@@ -110,18 +110,20 @@ def get_llm_response(
             # Return error immediately if image processing fails critically
             return f"⚠️ Error: Failed to process image data. Details: {img_e}"
 
-    print(f"DEBUG: Sending Payload to Ollama:\n{json.dumps(payload, indent=2)}") # Print the actual payload
+    # print(f"DEBUG: Sending Payload to Ollama:\n{json.dumps(payload, indent=2)}") # Optional debug print
 
     # --- Perform Request ---
-    llm_response = ""
+    llm_response = "" # Initialize default response
     try:
         print(f"Sending request to Ollama model '{model}' at {ollama_url}...")
         response = requests.post(ollama_url, json=payload, stream=True, timeout=180) # Longer timeout for generation
         response.raise_for_status() # Raise HTTP errors (4xx, 5xx)
 
         print("Connection successful. Receiving stream...")
-        complete_response = ""
+        complete_response = "" # Accumulate successful chunks here
         chunk_count = 0
+        stream_error_occurred = False # Flag to track if stream decoding failed
+
         for chunk in response.iter_lines(decode_unicode=True):
             chunk_count += 1
             if chunk:
@@ -132,16 +134,25 @@ def get_llm_response(
                     if chunk_data.get("done"):
                         print(f"Stream finished (done=true received after {chunk_count} chunks).")
                         # Optional: log context length, eval duration etc. if present
-                        final_context = chunk_data.get('context')
-                        if final_context:
-                            print(f"  Final context length: {len(final_context)}")
+                        # final_context = chunk_data.get('context')
+                        # if final_context: print(f"  Final context length: {len(final_context)}")
                         break # Exit loop once done signal is received
                 except json.JSONDecodeError as e:
-                    print(f"Error decoding JSON chunk {chunk_count}: {e}\nChunk: {chunk}")
-                    complete_response += f"\n\n[Error decoding stream chunk: {e}]"
+                    # --- >>> MODIFIED ERROR HANDLING <<< ---
+                    error_msg = f"Error decoding JSON stream from Ollama after {chunk_count} chunks. Check Ollama server logs. Details: {e}"
+                    print(f"{error_msg}\nProblematic Chunk: {chunk}")
+                    # Set the entire response to an error message
+                    llm_response = f"⚠️ Error: {error_msg}"
+                    stream_error_occurred = True # Set flag
+                    # --- <<< END MODIFIED >>> ---
                     break # Stop processing after error
 
-        llm_response = complete_response if complete_response else "No response text received from LLM stream."
+        # --- >>> MODIFIED LOGIC AFTER LOOP <<< ---
+        # Assign accumulated response only if no stream error occurred
+        if not stream_error_occurred:
+             llm_response = complete_response if complete_response else "No response text received from LLM stream."
+        # If stream_error_occurred is True, llm_response already holds the error message
+        # --- <<< END MODIFIED >>> ---
 
     except requests.exceptions.Timeout:
          print(f"Error: Ollama request timed out connecting to or streaming from {ollama_url}")
@@ -156,9 +167,9 @@ def get_llm_response(
          try:
               if e.response is not None:
                    error_detail += f" | Response Status: {e.response.status_code} | Response Text: {e.response.text[:500]}"
-         except Exception:
-              pass # Ignore errors trying to get more detail
+         except Exception: pass
          llm_response = f"⚠️ Error communicating with Ollama: {error_detail}"
 
+    # Optional: Final log of response length
     # print(f"LLM Response length: {len(llm_response)}")
     return llm_response
