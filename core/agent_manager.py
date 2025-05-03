@@ -1,7 +1,8 @@
 # ArtAgent/core/agent_manager.py
 import time
 from .utils import load_json # Utility for loading team definitions if needed elsewhere
-from agents.ollama_agent import get_llm_response # To call individual agents
+# IMPORT get_llm_response from ollama_agent
+from agents.ollama_agent import get_llm_response
 from . import history_manager as history # To log steps to persistent history
 
 AGENT_TEAMS_FILE = 'agent_teams.json' # Relative path from root
@@ -22,6 +23,8 @@ def run_team_workflow(
     all_roles_data: dict, # Pass the combined dict of all available roles
     history_list: list, # Pass the current persistent history list for logging
     worker_model_name: str,
+    # Pass single_image_input if workflows need to handle images
+    single_image_input = None, # Add image input parameter (default to None)
     return_intermediate_steps: bool = False # Argument to control return value
     ) -> tuple[str, list, dict | None]: # Updated return signature
     """
@@ -35,6 +38,7 @@ def run_team_workflow(
         all_roles_data (dict): Dictionary containing definitions for all available agent roles.
         history_list (list): The current persistent history list (passed by value, returns updated).
         worker_model_name (str): The model selected in the UI for worker agents.
+        single_image_input (PIL.Image, optional): A single PIL image object if provided. Defaults to None.
         return_intermediate_steps (bool): If True, return dict of step outputs. Defaults to False.
 
     Returns:
@@ -59,10 +63,15 @@ def run_team_workflow(
     step_outputs_dict = {} # Store intermediate results {step_index: {details}}
 
     current_context = f"User Request: {user_input}\nWorkflow Goal: {team_definition.get('description', 'Generate detailed output.')}\n"
+    if single_image_input: # Add note about image if present
+         current_context += "Input includes a single image.\n"
+    current_context += "---\n" # Separator after initial context
+
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    initial_log = f"Timestamp: {timestamp}\nWorkflow Start: '{team_name}'\nUser Input: {user_input}\n---\n"
     # Log start to persistent history
+    initial_log = f"Timestamp: {timestamp}\nWorkflow Start: '{team_name}'\nStrategy: {assembly_strategy}\nModel: {worker_model_name}\nUser Input: {user_input}\nImage Provided: {'Yes' if single_image_input else 'No'}\n---\n"
     history_list = history.add_to_history(history_list, initial_log)
+
 
     # --- Execute Sequence ---
     for i, step in enumerate(steps):
@@ -93,8 +102,19 @@ def run_team_workflow(
         step_prompt = f"Context:\n{current_context}\n---\nYour Role: {step_role} - {role_desc}\nYour Goal for this step: {step_goal}\n\nBased *only* on the provided context and your goal, provide your specific output:"
 
         # --- Call the LLM using get_llm_response ---
-        # Consider adding configurable token limit per step in team definition later
         step_max_tokens = initial_settings.get("sweep_step_max_tokens", 750) # Example: Default max for intermediate steps
+
+        # Determine if image needs to be passed to this specific step
+        # Basic logic: Pass image if it exists AND the worker model has vision.
+        # More advanced: Could add a flag per step in team def: "needs_image": true
+        images_for_step = None
+        model_has_vision = any(m.get('name') == worker_model_name and m.get('vision') for m in initial_settings.get('loaded_models_data', [])) # Check if model supports vision based on loaded data if available
+        if single_image_input and model_has_vision:
+            print(f"  Passing image to agent '{step_role}' (model '{worker_model_name}' supports vision).")
+            images_for_step = [single_image_input]
+        elif single_image_input and not model_has_vision:
+             print(f"  Not passing image to agent '{step_role}' (model '{worker_model_name}' does not support vision).")
+
 
         step_output_text = get_llm_response(
             role=step_role, # Use the actual role name from step definition
@@ -102,9 +122,8 @@ def run_team_workflow(
             model=worker_model_name,
             settings=initial_settings,
             roles_data=all_roles_data, # Pass full roles data for option merging
+            images=images_for_step, # Pass image list if applicable for this step
             max_tokens=step_max_tokens,
-            # Pass other args like images if workflow handles them
-            # ollama_api_options can be defined per-step in team definition too (future enhancement)
         )
 
         # Check if agent returned an error message (starts with warning emoji)
@@ -118,7 +137,7 @@ def run_team_workflow(
             error_log = f"Timestamp: {timestamp}\nWorkflow Step {step_idx} Error ('{step_role}')\nError Message: {error_msg}\nContext Provided (start):\n{current_context[:500]}...\n---\n"
             history_list = history.add_to_history(history_list, error_log)
             # Return error message, updated history, and collected step outputs so far
-            return f"Workflow stopped due to error in step {step_idx} ({step_role}): {error_msg}", history_list, step_outputs_dict
+            return f"Workflow stopped due to error in step {step_idx} ({step_role}): {error_msg}", history_list, (step_outputs_dict if return_intermediate_steps else None)
         else:
             clean_output = step_output_text.strip()
             print(f"  Agent '{step_role}' Output Length: {len(clean_output)}")
@@ -139,27 +158,28 @@ def run_team_workflow(
     # Filter for steps that actually produced non-error output for assembly strategies
     successful_outputs = {idx: data["output"] for idx, data in step_outputs_dict.items() if data.get("output") is not None and data.get("error") is None}
 
+    # --- Strategy: Concatenate (Existing) ---
     if assembly_strategy == "concatenate":
         print("Strategy: Concatenate")
         if not successful_outputs:
              final_output = "Error: No successful outputs generated by workflow steps to concatenate."
         else:
-            # Concatenate in order of step index using successful outputs only
             assembly_list = []
             for idx in sorted(successful_outputs.keys()):
                  # Find role associated with this index
                  step_info = next((s for i, s in enumerate(steps) if i + 1 == idx), None)
                  role_name = step_info.get("role", f"Step {idx}") if step_info else f"Step {idx}"
-                 assembly_list.append(f"--- Contribution: {role_name} ---\n{successful_outputs[idx]}")
-            final_output = "\n\n".join(assembly_list)
+                 # Simpler join, no headers added by default in this strategy
+                 assembly_list.append(successful_outputs[idx])
+            final_output = "\n\n".join(assembly_list) # Join with double newline
 
+    # --- Strategy: Refine Last (Existing) ---
     elif assembly_strategy == "refine_last":
         print("Strategy: Refine Last Step")
-        # Find the output of the *last* step definition that ran successfully
         last_successful_idx = None
-        for i in range(len(steps) - 1, -1, -1): # Iterate backwards through defined steps
+        for i in range(len(steps) - 1, -1, -1):
              step_idx_check = i + 1
-             if step_idx_check in successful_outputs: # Check if this step succeeded
+             if step_idx_check in successful_outputs:
                   last_successful_idx = step_idx_check
                   break
 
@@ -168,24 +188,84 @@ def run_team_workflow(
              role_name = step_info.get("role", f"Step {last_successful_idx}") if step_info else f"Step {last_successful_idx}"
              print(f"Using output from final successful Agent: '{role_name}' (Step {last_successful_idx})")
              final_output = successful_outputs[last_successful_idx]
-             # Optional: Implement a separate "refiner" call here if the last step wasn't implicitly the refiner.
-             # refiner_prompt = f"Context:\n{current_context}\n\nCombine into concise prompt..."
-             # final_output = get_llm_response(role="PromptRefiner", ..., context=current_context)
         else:
              print("Warning: Refine strategy selected, but couldn't find output from any successful step. No output generated.")
              final_output = "Error: No valid output generated by workflow steps for refinement."
 
-    else: # Default fallback to concatenate
-        print(f"Warning: Unknown assembly strategy '{assembly_strategy}'. Concatenating.")
+    # --- Strategy: Summarize All (NEW) ---
+    elif assembly_strategy == "summarize_all":
+        print("Strategy: Summarize All Steps")
         if not successful_outputs:
-             final_output = "Error: No successful outputs generated by workflow steps to concatenate."
+             final_output = "Error: No successful outputs generated by workflow steps to summarize."
+        else:
+             print("  Preparing context for final summarization step...")
+             summary_context_parts = [f"Initial User Request: {user_input}\n---"]
+             for idx in sorted(successful_outputs.keys()):
+                  step_info = next((s for i, s in enumerate(steps) if i + 1 == idx), None)
+                  role_name = step_info.get("role", f"Step {idx}") if step_info else f"Step {idx}"
+                  summary_context_parts.append(f"Output from Step {idx} ({role_name}):\n{successful_outputs[idx]}\n---")
+             summary_context = "\n".join(summary_context_parts)
+
+             # Define prompt for summarizer agent
+             summarizer_prompt = (
+                 f"Context from previous workflow steps:\n{summary_context}\n"
+                 "---\n"
+                 "Your Task: Based *only* on the context provided above, synthesize the information from all steps "
+                 "into a single, coherent, and well-structured final text. Integrate the key ideas and details smoothly. "
+                 "Focus on generating the final desired output, not commenting on the process."
+             )
+             # Define a role for the summarizer (could be configurable)
+             summarizer_role = "Universal Prompter" # Or use last agent's role, or a new specific role
+             print(f"  Calling final summarizer agent '{summarizer_role}' using model '{worker_model_name}'...")
+
+             # Use a reasonable token limit for the summary
+             summary_max_tokens = initial_settings.get("summary_step_max_tokens", 1024)
+
+             final_output = get_llm_response(
+                  role=summarizer_role,
+                  prompt=summarizer_prompt,
+                  model=worker_model_name,
+                  settings=initial_settings,
+                  roles_data=all_roles_data,
+                  images=None, # Summary step unlikely to need image again
+                  max_tokens=summary_max_tokens,
+             )
+
+             # Log this extra step to history
+             summary_log = f"Timestamp: {timestamp}\nWorkflow Step [Final Summary]: '{summarizer_role}'\nGoal: Synthesize all previous step outputs.\nOutput:\n{final_output}\n---\n"
+             history_list = history.add_to_history(history_list, summary_log)
+
+             if final_output.strip().startswith("⚠️ Error:"):
+                 print(f"  Summarizer agent returned an error: {final_output.strip()}")
+                 # Optionally return the error or the last successful output? For now, return error.
+                 final_output = f"Error during final summarization step: {final_output.strip()}"
+
+    # --- Strategy: Structured Concatenate (NEW) ---
+    elif assembly_strategy == "structured_concatenate":
+        print("Strategy: Structured Concatenate")
+        if not successful_outputs:
+             final_output = "Error: No successful outputs generated by workflow steps for structured concatenation."
         else:
             assembly_list = []
             for idx in sorted(successful_outputs.keys()):
                  step_info = next((s for i, s in enumerate(steps) if i + 1 == idx), None)
                  role_name = step_info.get("role", f"Step {idx}") if step_info else f"Step {idx}"
-                 assembly_list.append(successful_outputs[idx]) # Just append output for simple concat
-            final_output = "\n\n".join(assembly_list) # Join with double newline
+                 # Format with header including role and step number
+                 formatted_block = f"--- Output from Agent: {role_name} (Step {idx}) ---\n{successful_outputs[idx]}"
+                 assembly_list.append(formatted_block)
+            final_output = "\n\n".join(assembly_list) # Join blocks with double newline
+
+    # --- Fallback for Unknown Strategy ---
+    else:
+        print(f"Warning: Unknown assembly strategy '{assembly_strategy}'. Defaulting to 'concatenate'.")
+        # Default to simple concatenation logic (duplicate of above for safety)
+        if not successful_outputs:
+             final_output = "Error: No successful outputs generated by workflow steps to concatenate (fallback)."
+        else:
+            assembly_list = []
+            for idx in sorted(successful_outputs.keys()):
+                 assembly_list.append(successful_outputs[idx])
+            final_output = "\n\n".join(assembly_list)
 
 
     # Log final assembly to persistent history
@@ -195,5 +275,4 @@ def run_team_workflow(
     print(f"--- Workflow {team_name} Finished. Output Length: {len(final_output)} ---")
 
     # Return final output, updated history list, and intermediate steps if requested
-    # The intermediate steps dict includes errors if they occurred for logging purposes.
     return final_output, history_list, (step_outputs_dict if return_intermediate_steps else None)

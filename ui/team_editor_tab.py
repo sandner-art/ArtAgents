@@ -10,7 +10,6 @@ def create_team_editor_tab(initial_team_names, initial_available_agent_names):
         gr.Markdown("Define sequences of agents to perform complex tasks. Saved teams appear in the Chat tab dropdown.")
 
         # State to hold the data for the team currently being edited
-        # Structure: {'name': str, 'description': str, 'steps': list[dict], 'assembly_strategy': str}
         current_team_editor_state = gr.State(value={
             "name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"
         })
@@ -31,8 +30,15 @@ def create_team_editor_tab(initial_team_names, initial_available_agent_names):
                 team_name_textbox = gr.Textbox(label="Team Name", info="Unique name for this workflow.")
                 team_description_textbox = gr.Textbox(label="Team Description", lines=2, info="Briefly explain what this team does.")
                 assembly_strategy_radio = gr.Radio(
-                    choices=["concatenate", "refine_last"], value="concatenate", label="Final Output Strategy",
-                    info="'concatenate' joins all step outputs, 'refine_last' uses only the output of the last step (assumed to be a refiner)."
+                    # ***** UPDATED CHOICES HERE *****
+                    choices=["concatenate", "refine_last", "summarize_all", "structured_concatenate"],
+                    value="concatenate",
+                    label="Final Output Strategy",
+                    # ***** UPDATED INFO HERE *****
+                    info=("'concatenate': Joins all step outputs.\n"
+                          "'refine_last': Uses only the last step's output.\n"
+                          "'summarize_all': Calls an LLM to synthesize all outputs.\n"
+                          "'structured_concatenate': Joins outputs with agent/step labels.")
                 )
 
         gr.Markdown("---")
@@ -40,10 +46,7 @@ def create_team_editor_tab(initial_team_names, initial_available_agent_names):
 
         with gr.Row():
             with gr.Column(scale=2):
-                # Display current steps (using JSON for simplicity in V1)
                 steps_display_json = gr.JSON(label="Current Steps (Read-Only View)", scale=2)
-                # Alternative display (less ideal for complex steps):
-                # steps_display_df = gr.DataFrame(headers=["Step", "Role", "Goal"], interactive=False)
 
             with gr.Column(scale=1):
                 gr.Markdown("#### Add/Remove Steps")
@@ -51,18 +54,10 @@ def create_team_editor_tab(initial_team_names, initial_available_agent_names):
                     choices=initial_available_agent_names, label="Select Agent Role for New Step",
                     info="Choose an agent (Default, Custom, or [File]) to add."
                 )
-                # Goal textbox is optional for now, can be added later
-                # step_goal_textbox = gr.Textbox(label="Optional Goal for Step")
                 add_step_button = gr.Button("Add Selected Agent as Step", variant="secondary")
-
-                gr.Markdown("---") # Separator
-
+                gr.Markdown("---")
                 step_index_to_remove = gr.Number(label="Step Number to Remove", minimum=1, precision=0, value=1)
                 remove_step_button = gr.Button("Remove Step #", variant="secondary")
-                # Reordering buttons omitted for V1 simplicity
-                # move_up_button = gr.Button("Move Up")
-                # move_down_button = gr.Button("Move Down")
-
 
         gr.Markdown("---")
         with gr.Row():
@@ -85,6 +80,5 @@ def create_team_editor_tab(initial_team_names, initial_available_agent_names):
         "remove_step_button": remove_step_button,
         "save_team_button": save_team_button,
         "save_status_textbox": save_status_textbox,
-        # State for this tab
         "current_team_editor_state": current_team_editor_state,
     }
