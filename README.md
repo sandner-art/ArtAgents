@@ -136,7 +136,7 @@ ArtAgent/
 ## Installation & Setup
 
 1.  **Install Ollama:** Download and install from [ollama.com](https://ollama.com/). Ensure the `ollama` command is available in your terminal.
-2.  **Clone Repository:** `git clone <your-repository-url>` and navigate into the `ArtAgent` directory (`cd ArtAgent`).
+2.  **Clone Repository:** `git clone https://github.com/sandner-art/ArtAgents` and navigate into the `ArtAgents` directory (`cd ArtAgents`).
 3.  **Setup Python Environment (Recommended):**
     *   **Using Venv (Manual):** Create and activate a virtual environment (Python 3.9+ recommended, 3.10+ required for potential Gradio 5 upgrade).
         ```bash
@@ -151,8 +151,20 @@ ArtAgent/
         ```
     *   **(Alternative) Using Scripts:** Run `.\scripts\setupvenv.bat` (Windows) or equivalent `.sh` script to automate venv creation and `pip install`.
     *   **(Future) Using Poetry:** If Poetry is implemented, replace step 3 with `poetry install`.
-4.  **Setup Ollama Models:** Run `.\scripts\setup.bat` (Windows) or equivalent `.sh` script. This checks Ollama connectivity and downloads recommended models listed in `models.json`. Alternatively, use `ollama pull <model_name>` manually for desired models.
+4.  **Setup Ollama Models:** Run `.\scripts\setup.bat` (Windows) or equivalent `.sh` script. This checks Ollama connectivity and downloads recommended models listed in `models.json`. Alternatively, use `ollama pull <model_name>` manually for desired models (new multimodal models from ollama archive are here: https://ollama.com/blog/multimodal-models).
 5.  **Configure (Optional):** Review and edit JSON files (`settings.json`, `models.json`, `agent_teams.json`, etc.) to customize the application.
+
+## Tip: Pulling custom models from Huggingface
+
+- On Windows, your Ollama models are typically stored in `C:\Users\{Your User Name}\.ollama\models`.
+- For official Ollama models: The ollama pull command is designed for models that have been published to the official Ollama library (e.g., `ollama pull llama3`).
+- For GGUF files on Hugging Face: For custom GGUF files hosted on Hugging Face, you must use the `ollama run hf.co/{username}/{repository}` format to automatically pull and load them (e.g., `ollama run hf.co/sandner/OpenReasoning-Nemotron-1.5B-Q6_K-GGUF`). Wait for the download to finish, then exit the interactive session by typing /bye or pressing Ctrl + D.
+- Verify the GGUF file is cached. On Windows, your Ollama models are typically stored in C:\Users\{Your User Name}\.ollama\models.
+- Create a Modelfile: Create a text file named Modelfile (with no file extension). In the Modelfile, add the **FROM** instruction that points to the GGUF file you just downloaded. For this model, the GGUF file is likely named OpenReasoning-Nemotron-1.5B-Q6_K.gguf. If you create Modelfile in the same directory, the command would look something like this:
+`FROM ./OpenReasoning-Nemotron-1.5B-Q6_K.gguf`
+- Run the `ollama create` command with a simple, memorable name (e.g., nemotron-reasoning). `ollama create nemotron-reasoning -f ./Modelfile`
+- Check if the new model is listed with `ollama list`
+- Add it to models.json, and your app can now select and use nemotron-reasoning.
 
 ## Running the Application
 

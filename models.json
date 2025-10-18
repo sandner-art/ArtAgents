@@ -1,10 +1,14 @@
 [
     {
+        "name": "gemma3:latest",
+        "vision": true
+    },    
+    {
         "name": "llava:latest",
         "vision": true
     },
     {
-        "name": "llama3:latest",
+        "name": "mistral:latest",
         "vision": false
     },
     {
