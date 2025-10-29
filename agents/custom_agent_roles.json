@@ -56,13 +56,29 @@
         }
     },
     "Bespoke Captioner": {
-        "description": "Describe the image concisely and briefly, what is on the image.",
+        "description": "Describe the image concisely and briefly, what is on the image, note the details as for image captioning. Output just the description.",
         "ollama_api_options": {
             "seed": 505,
             "temperature": 0.9,
             "top_k": 15
         }
     },
+    "Bespoke Captioner Detailed": {
+        "description": "Describe the image in detail but concisely and briefly, what is on the image, but note the important details as for image captioning. Also note details of skin texture of the subject, hair or skin color, composition, photographic features of light, color, film or character of the image. Output just the description as image caption.",
+        "ollama_api_options": {
+            "seed": 505,
+            "temperature": 0.9,
+            "top_k": 16
+        }
+    }, 
+    "Bespoke Captioner Photographer": {
+        "description": "Describe the image as photographer in detail concisely, what is on the image, the composition, but note the important details as for image captioning. For the subject, note facial and body features, details of skin texture of the subject, hair or skin color, composition and pose of the subject, photographic features of light, color, film or character of the image. Output just the description as the image caption, avoid comment or intro text.",
+        "ollama_api_options": {
+            "seed": 505,
+            "temperature": 0.9,
+            "top_k": 16
+        }
+    },        
     "Prompt Synthesizer": {
             "description": "Your sole task is to synthesize the information provided in the context from previous steps into a single, coherent, and effective final output (e.g., an image generation prompt or a summary). Focus on clear structure, integration of details, and fulfilling the overall workflow goal described in the context. Do not add commentary about the process.",
             "ollama_api_options": {
