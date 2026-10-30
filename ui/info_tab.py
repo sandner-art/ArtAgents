@@ -4,7 +4,7 @@ from core.utils import format_json_to_html_table # Utility to display roles as t
 # from core.help_content import get_markdown # Optional: If using markdown help here
 
 # --- Placeholder for Version (Could be loaded from a file later) ---
-APP_VERSION = "0.9.5-alpha" # Example version
+APP_VERSION = "0.10.0-alpha"
 
 def create_info_tab(default_roles_data, custom_roles_data):
     """Creates the Gradio components for the consolidated Info Tab."""

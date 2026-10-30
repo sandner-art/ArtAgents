@@ -14,7 +14,7 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ##  Recent Updates
 
-### v0.10 (October 2026): Image Generation, Live Streaming, Modern Ollama API
+### v0.10.0-alpha (October 2026): Image Generation, Live Streaming, Modern Ollama API
 
 *   **Image Generation tab:** generate images from your prompts with **ComfyUI** (any workflow exported in API format, see `image_workflows/README.md`), **Forge / AUTOMATIC1111 / SD.Next** (`--api`), or **Ollama image models** (experimental: Ollama removed image generation in v0.32.6, so this backend shows a clear message until it returns). Images are saved as PNG with the prompt and settings embedded, plus an optional `.txt` with the prompt. Use **🎨 Send to Image Generation** in the Chat tab to turn an answer into an image.
 *   **Live streaming + Stop:** answers appear token by token; team runs show each step as it is written. **⏹ Stop** buttons end chat, caption batches, sweeps and image jobs (the server stops generating too).
