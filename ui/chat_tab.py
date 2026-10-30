@@ -74,6 +74,7 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
                                label="Load Agents from .json File (Session Only)",
                                file_count="single",
                                file_types=[".json"],
+                               type="filepath",
                                scale=2
                           )
                           loaded_agent_file_display = gr.Textbox(
@@ -89,11 +90,9 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
 
         with gr.Row():
              with gr.Column(scale=2):
-                 with gr.Row():
-                     gr.Markdown("### LLM Response") # <-- FIX: scale removed
-                     copy_response_button = gr.Button("📋 Copy", variant="tool", scale=0) # <-- FIX: scale set to 0
                  llm_response_display = gr.Textbox(
-                     lines=15, interactive=False,
+                     label="LLM Response", lines=15, interactive=False,
+                     buttons=["copy"], # Built-in copy-to-clipboard button (shown in the label bar)
                      elem_id="llm_response"
                  )
                  comment_input = gr.Textbox(
@@ -103,10 +102,9 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
              with gr.Column(scale=1):
                  gr.Markdown("### Session History")
                  current_session_history_display = gr.Textbox(
-                      label="Current Session Log", lines=20, interactive=False, elem_id="session_history"
+                      label="Current Session Log", lines=20, interactive=False,
+                      buttons=["copy"], elem_id="session_history"
                  )
-
-        js_trigger_output = gr.HTML(visible=False, value="<!-- JS Trigger -->")
 
 
     return {
@@ -127,10 +125,8 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
         "comment_button": comment_button,
         "clear_session_button": clear_session_button,
         "llm_response_display": llm_response_display,
-        "copy_response_button": copy_response_button,
         "comment_input": comment_input,
         "current_session_history_display": current_session_history_display,
-        "js_trigger_output": js_trigger_output,
         "selected_model_tracker": selected_model_tracker,
         "model_state": model_state,
         "loaded_file_agents_state": loaded_file_agents_state,

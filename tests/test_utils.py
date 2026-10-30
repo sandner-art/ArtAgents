@@ -18,7 +18,9 @@ try:
         save_json,
         get_theme_object,
         AVAILABLE_THEMES, # Need this for testing
-        PROJECT_ROOT # Also test the constant if needed
+        PROJECT_ROOT, # Also test the constant if needed
+        format_json_to_html_table,
+        clean_agent_artifacts,
     )
 except ImportError as e:
     pytest.skip(f"Skipping utils tests, core module not found: {e}", allow_module_level=True)
@@ -34,10 +36,9 @@ def test_get_absolute_path_basic():
     abs_path = get_absolute_path("some/relative/path.txt")
     assert os.path.isabs(abs_path)
     # Use os.path.normpath and check containment for robustness
-    expected_end = os.path.normpath(os.path.join("ArtAgent", "some", "relative", "path.txt"))
-    # Use a separator that works on the current OS to check end part
-    # or check containment which is less strict but often sufficient
-    assert expected_end in os.path.normpath(abs_path)
+    # The result must be <project root>/some/relative/path.txt, whatever the checkout folder is called
+    expected = os.path.normpath(os.path.join(project_root, "some", "relative", "path.txt"))
+    assert os.path.normpath(abs_path) == expected
 
 
 def test_get_absolute_path_project_root():
@@ -159,3 +160,39 @@ def test_available_themes_structure():
          # Check if it's a Gradio theme base class or specific instance
          # Allow for potential custom themes inheriting from ThemeClass
          assert isinstance(theme_obj, (gr.themes.base.ThemeClass, gr.themes.Default))
+
+
+# --- Tests for format_json_to_html_table (Info tab) ---
+
+def test_format_json_to_html_table_escapes_markup():
+    """Role names/descriptions are rendered as text, never as live HTML/JS in gr.HTML."""
+    roles = {
+        "<script>alert('key')</script>": {"description": "<script>alert('desc')</script>", "ollama_api_options": {"stop": ["</code><img src=x onerror=alert(1)>"]}},
+        "PlainString": "<b>bold</b>",
+        "NumberValue": 5,
+    }
+    html_out = format_json_to_html_table(roles)
+
+    assert "<script>" not in html_out
+    assert "<img" not in html_out
+    assert "<b>bold</b>" not in html_out
+    assert "&lt;script&gt;alert(&#x27;key&#x27;)&lt;/script&gt;" in html_out
+    assert "&lt;script&gt;alert(&#x27;desc&#x27;)&lt;/script&gt;" in html_out
+    assert "&lt;b&gt;bold&lt;/b&gt;" in html_out
+    assert html_out.startswith("<table") and html_out.endswith("</table>") # Table markup itself is intact
+    assert "<td style='border: 1px solid #ddd; padding: 8px; word-wrap: break-word;'>5</td>" in html_out
+
+
+def test_format_json_to_html_table_invalid_input():
+    assert "Invalid data format" in format_json_to_html_table(["not", "a", "dict"])
+
+
+# --- Tests for clean_agent_artifacts ---
+
+def test_clean_agent_artifacts_removes_headers():
+    text = "--- Output from Agent: A ---\nfirst\n  --- Output from Agent: B ---\nsecond\n"
+    assert clean_agent_artifacts(text) == "first\nsecond"
+
+
+def test_clean_agent_artifacts_non_string_passthrough():
+    assert clean_agent_artifacts(None) is None

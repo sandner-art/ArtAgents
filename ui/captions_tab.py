@@ -81,10 +81,9 @@ def create_captions_tab(initial_agent_team_choices, initial_vision_models):
                         label="Text to Add"
                     )
                     with gr.Row():
-                        captions_prepend_button = gr.Button("Prepend Text")
-                        captions_append_button = gr.Button("Append Text")
-                        captions_prepend_button.interactive = False
-                        captions_append_button.interactive = False
+                        # Disabled until multi-select is implemented (setting .interactive after creation has no effect)
+                        captions_prepend_button = gr.Button("Prepend Text", interactive=False)
+                        captions_append_button = gr.Button("Append Text", interactive=False)
 
 
     return {

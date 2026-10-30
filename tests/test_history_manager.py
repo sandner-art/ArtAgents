@@ -34,7 +34,12 @@ JSON_DUMP_PATH = 'core.history_manager.json.dump' # Used by save_history
 
 
 # --- Fixtures ---
-# No autouse fixture needed with the new mocking strategy for load_history
+
+@pytest.fixture
+def history_file_exists():
+    """load_history() only reads the file when it exists; pretend it does for load_json-driven tests."""
+    with patch('core.history_manager.os.path.exists', return_value=True) as mock_exists:
+        yield mock_exists
 
 @pytest.fixture
 def temp_history_file(tmp_path):
@@ -45,7 +50,7 @@ def temp_history_file(tmp_path):
 # --- Tests for load_history ---
 
 @patch(LOAD_JSON_PATH) # Mock load_json used by history_manager
-def test_load_history_valid(mock_load_json):
+def test_load_history_valid(mock_load_json, history_file_exists):
     """Test loading a valid history list via mocked load_json."""
     test_data = ["entry1", "entry2"]
     mock_load_json.return_value = test_data # Simulate load_json returning list
@@ -54,21 +59,31 @@ def test_load_history_valid(mock_load_json):
     mock_load_json.assert_called_once_with(REAL_HISTORY_FILE, is_relative=True)
 
 @patch(LOAD_JSON_PATH, return_value={}) # Simulate load_json returning {} for not found/empty/error
-def test_load_history_non_existent(mock_load_json):
-    """Test loading when file doesn't exist (load_json returns {})."""
+def test_load_history_missing_payload(mock_load_json, history_file_exists):
+    """Test loading when load_json returns {} (unreadable file)."""
     history = load_history()
     assert history == [] # load_history converts {} to []
     mock_load_json.assert_called_once_with(REAL_HISTORY_FILE, is_relative=True)
 
+@patch(LOAD_JSON_PATH)
+@patch('core.history_manager.os.path.exists', return_value=False)
+def test_load_history_first_run_no_file(mock_exists, mock_load_json, capsys):
+    """First run: no history file -> empty list, no file read, no warning printed."""
+    history = load_history()
+    assert history == []
+    mock_load_json.assert_not_called()
+    captured = capsys.readouterr()
+    assert "did not contain a valid list" not in captured.out
+
 @patch(LOAD_JSON_PATH, return_value={})
-def test_load_history_empty_file(mock_load_json):
+def test_load_history_empty_file(mock_load_json, history_file_exists):
     """Test loading an empty history file (load_json returns {})."""
     history = load_history()
     assert history == []
     mock_load_json.assert_called_once_with(REAL_HISTORY_FILE, is_relative=True)
 
 @patch(LOAD_JSON_PATH)
-def test_load_history_invalid_json(mock_load_json):
+def test_load_history_invalid_json(mock_load_json, history_file_exists):
      # Simulate load_json returning {} after internal error (no warning check needed here)
     mock_load_json.return_value = {}
     history = load_history()
@@ -76,7 +91,7 @@ def test_load_history_invalid_json(mock_load_json):
     mock_load_json.assert_called_once_with(REAL_HISTORY_FILE, is_relative=True)
 
 @patch(LOAD_JSON_PATH)
-def test_load_history_not_a_list(mock_load_json, capsys):
+def test_load_history_not_a_list(mock_load_json, history_file_exists, capsys):
     """Test loading a file containing a dict (load_json returns dict)."""
     mock_load_json.return_value = {"key": "value"} # Simulate load_json returning dict
     history = load_history()

@@ -9,6 +9,8 @@ MAX_HISTORY_ENTRIES = 150
 def load_history():
     """Loads history from the JSON file."""
     # load_json from utils now handles path resolution and errors
+    if not os.path.exists(get_absolute_path(HISTORY_FILE)):
+        return [] # First run: no history yet
     history_data = load_json(HISTORY_FILE, is_relative=True)
     if isinstance(history_data, list):
         return history_data

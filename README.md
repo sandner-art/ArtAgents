@@ -138,18 +138,21 @@ ArtAgent/
 1.  **Install Ollama:** Download and install from [ollama.com](https://ollama.com/). Ensure the `ollama` command is available in your terminal.
 2.  **Clone Repository:** `git clone https://github.com/sandner-art/ArtAgents.git` and navigate into the `ArtAgent` directory (`cd ArtAgent`).
 3.  **Setup Python Environment (Recommended):**
-    *   **Using Venv (Manual):** Create and activate a virtual environment (Python 3.9+ recommended, 3.10+ required for potential Gradio 5 upgrade).
+    *   **Using Venv (Manual):** Create and activate a virtual environment (**Python 3.11+ required**).
         ```bash
         python -m venv venv
         # On Windows: .\venv\Scripts\activate
         # On Linux/macOS: source venv/bin/activate
         ```
-        Then install requirements:
+        Then install requirements in **two steps**:
         ```bash
         pip install --upgrade pip
         pip install -r requirements.txt
+        pip install --no-deps -r requirements-pillow.txt
         ```
-    *   **(Alternative) Using Scripts:** Run `.\scripts\setupvenv.bat` (Windows) or equivalent `.sh` script to automate venv creation and `pip install`.
+        The second step installs the patched Pillow 13. Gradio still declares `pillow<13`, so pip cannot resolve both in one command; `pip check` will mention that cap, which is expected. The app prints a warning at startup if an older Pillow is installed.
+    *   **(Alternative) Using Scripts:** Run `.\scripts\setupvenv.bat` (Windows) or `scripts/setupvenv.sh` (Linux/macOS) to create `venv` in the project root and run both install steps. Start the app with `.\scripts\govenv.bat` or `scripts/govenv.sh`.
+    *   **Upgrading an existing install:** activate your venv and run the two `pip install` commands above.
     *   **(Future) Using Poetry:** If Poetry is implemented, replace step 3 with `poetry install`.
 4.  **Setup Ollama Models:** Run `.\scripts\setup.bat` (Windows) or equivalent `.sh` script. This checks Ollama connectivity and downloads recommended models listed in `models.json`. Alternatively, use `ollama pull <model_name>` manually for desired models.
 5.  **Configure (Optional):** Review and edit JSON files (`settings.json`, `models.json`, `agent_teams.json`, etc.) to customize the application.
@@ -163,6 +166,8 @@ ArtAgent/
     *   Using Scripts: `.\scripts\govenv.bat` (Windows) or equivalent `.sh` script.
     *   (Future) Using Poetry: `poetry run python app.py`
 4.  **Access UI:** Open the local URL provided in the console (usually `http://127.0.0.1:7860`) in your web browser.
+
+> **Security note:** ArtAgents reads and writes files in any folder you type into the UI, so keep it bound to `127.0.0.1` (the default). If you enable `share=True` or `server_name="0.0.0.0"` in `app.py`, also pass `auth=("user", "password")` to `demo.launch()`.
 
 ## Documentation
 

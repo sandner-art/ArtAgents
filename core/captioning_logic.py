@@ -1,28 +1,27 @@
 # ArtAgent/core/captioning_logic.py
 import os
 import gradio as gr # Keep for gr.SelectData type hint if desired
-from PIL import Image
 import time
-import numpy as np
 
 # Import utilities and core components
-from .utils import get_absolute_path, load_json
 from .app_logic import execute_chat_or_team
-from . import history_manager as history
-
-IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+from .image_utils import IMAGE_EXTENSIONS, make_thumbnail, open_image
 
 # --- Function to load images and prepare data for Gallery ---
 def load_images_and_captions(folder_path: str):
     """
     Loads images and captions, returning data formatted for gr.Gallery.
 
+    The gallery receives in-memory thumbnails rather than file paths, so Gradio
+    serves them from its own cache and the app does not need to expose the
+    user's folders (previously `allowed_paths=["/"]`, i.e. the whole disk).
+
     Args:
         folder_path (str): The path to the folder.
 
     Returns:
         tuple: Contains:
-            - list[tuple[str, str]]: List of (image_path, filename) tuples for Gallery.
+            - list[tuple[PIL.Image.Image, str]]: List of (thumbnail, filename) tuples for Gallery.
             - dict[str, str]: Mapping of image filename to its absolute path.
             - dict[str, str]: Mapping of image filename to its caption text.
             - str: Status message.
@@ -45,6 +44,7 @@ def load_images_and_captions(folder_path: str):
 
     print(f"Loading captions from folder: {folder_path}")
     found_count = 0
+    skipped_count = 0
     try:
         listdir_sorted = sorted(os.listdir(folder_path))
         for filename in listdir_sorted:
@@ -52,10 +52,17 @@ def load_images_and_captions(folder_path: str):
             if ext.lower() in IMAGE_EXTENSIONS:
                 image_abs_path = os.path.join(folder_path, filename)
                 if os.path.isfile(image_abs_path):
+                    try:
+                        thumbnail = make_thumbnail(image_abs_path)
+                    except Exception as e:
+                        # Not a real PNG/JPEG/BMP/GIF/WEBP (or corrupt/oversized): skip it
+                        print(f"Warning: Skipping '{filename}': {e}")
+                        skipped_count += 1
+                        continue
                     image_filenames_sorted.append(filename)
                     image_paths[filename] = image_abs_path
-                    # Gallery expects list of (image_path, label) tuples
-                    gallery_data.append((image_abs_path, filename)) # Use filename as label
+                    # Gallery expects list of (image, label) tuples
+                    gallery_data.append((thumbnail, filename)) # Use filename as label
 
                     text_filename = name + ".txt"
                     text_path = os.path.join(folder_path, text_filename)
@@ -68,6 +75,8 @@ def load_images_and_captions(folder_path: str):
                     found_count += 1
 
         status = f"Loaded {found_count} image(s)." if found_count > 0 else "No supported image files found."
+        if skipped_count:
+            status += f" Skipped {skipped_count} unreadable or unsupported file(s) (see console)."
         print(status)
 
     except Exception as e:
@@ -258,7 +267,8 @@ def generate_captions_for_selected(
         print(f"    {msg}")
         status_messages.append(msg)
         skipped_count += 1
-        final_status = "\n".join(status_messages)
+        # Same "<summary> Status: X." first line as the other outcomes, so batch runs count it
+        final_status = f"Caption generation for '{selected_filename}' finished. Status: Skipped.\n" + "\n".join(status_messages)
         # Ensure correct return tuple structure (status, captions_dict, last_caption, session_history)
         return final_status, updated_captions, "", current_session_history
 
@@ -266,7 +276,7 @@ def generate_captions_for_selected(
     # --- Image loading and Agent call ---
     img = None
     try:
-        img = Image.open(image_path)
+        img = open_image(image_path) # Restricted to PNG/JPEG/BMP/GIF/WEBP decoders
         print(f"    Calling agent/team '{agent_or_team_display_name}' with model '{selected_model_display_name}'...")
 
         # Call the router, passing PIL image via 'single_image_input' keyword

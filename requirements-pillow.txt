@@ -1,0 +1,16 @@
+# ArtAgent/requirements-pillow.txt
+#
+# Security override for Pillow. Install AFTER requirements.txt:
+#   pip install --no-deps -r requirements-pillow.txt
+#
+# Why a separate file: Pillow 13.0.0 is the first release that fixes the
+# current batch of Pillow advisories (Ghostscript argument injection, TIFF/JPEG
+# heap overflows, PDF/GIF/MSP decompression-bomb DoS, etc.), but gradio 6.31.0
+# still declares "pillow<13" as a precautionary upper bound. pip refuses to
+# resolve both in one step, so Pillow is upgraded on its own with --no-deps.
+# ArtAgents is tested with gradio 6.31.0 + Pillow 13.0.0. `pip check` will
+# report the gradio/pillow cap; that warning is expected.
+#
+# Once a gradio release allows Pillow 13, move this line back into
+# requirements.txt and delete this file.
+pillow==13.0.0

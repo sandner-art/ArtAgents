@@ -27,7 +27,6 @@ from core.app_logic import (
     clear_full_history_callback,
     load_team_for_editing, clear_team_editor, add_step_to_editor,
     remove_step_from_editor, save_team_from_editor, delete_team_logic,
-    trigger_copy_js # Callback for copy button JS
 )
 from core.refinement_logic import comment_logic # <-- IMPORT from new module
 # --- <<< END UPDATED IMPORT >>> ---
@@ -45,6 +44,7 @@ from ui.history_tab import create_history_tab
 from ui.sweep_tab import create_sweep_tab
 from ui.captions_tab import create_captions_tab
 from ui.common_ui_elements import create_footer
+from core.image_utils import pillow_security_warning
 # Import captioning logic
 from core.captioning_logic import (
     load_images_and_captions,
@@ -105,6 +105,10 @@ all_available_agent_display_names_initial = sorted([get_role_display_name(name) 
 all_initial_worker_model_choices = sorted(list(set([name.replace(" (VISION)","") for name in model_names_with_vision])))
 
 
+# --- Dependency Security Check (Console Feedback Only) ---
+_pillow_warning = pillow_security_warning()
+if _pillow_warning: print(_pillow_warning)
+
 # --- Perform Initial Startup Check (Console Feedback Only) ---
 startup_checker = OllamaStatusChecker(OLLAMA_API_URL) # Pass full URL
 if not startup_checker.check(): print(startup_checker.get_console_message())
@@ -119,7 +123,8 @@ initial_ollama_options = settings.get("ollama_api_options", {})
 initial_ollama_options_ordered_keys = sorted(initial_ollama_options.keys())
 
 # --- Gradio Interface Definition ---
-with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
+# delete_cache: every hour, remove cached uploads/gallery thumbnails older than a day
+with gr.Blocks(title="ArtAgents", delete_cache=(3600, 86400)) as demo:
 
     # --- Define Main App States ---
     settings_state = gr.State(value=settings)
@@ -163,8 +168,8 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
          all_choices = ["(Direct Agent Call)"] + team_display_choices + role_display_choices
          new_value = all_choices[0] if all_choices else None
          print(f" Chat/Captions Agent/Team choices updated: {len(all_choices)} total")
-         chat_update = gr.Dropdown.update(choices=all_choices, value=new_value)
-         caption_update = gr.Dropdown.update(choices=all_choices, value=new_value)
+         chat_update = gr.update(choices=all_choices, value=new_value)
+         caption_update = gr.update(choices=all_choices, value=new_value)
          return chat_update, caption_update
 
     # Refreshes Team Editor Agent dropdown
@@ -177,7 +182,7 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         file_agent_keys = list(file_agents_dict.keys()) if file_agents_dict else []
         display_choices = sorted([get_role_display_name(name, file_agent_keys) for name in combined_roles.keys()])
         print(f" Available agents for editor updated: {len(display_choices)} total")
-        return gr.Dropdown.update(choices=display_choices), display_choices
+        return gr.update(choices=display_choices), display_choices
 
     # Releases all models
     def release_all_models_ui_callback(current_settings_state):
@@ -301,12 +306,7 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         outputs=[chat_comps['current_session_history_display'], session_history_state]
     )
 
-    # Copy Button Wiring (Updated for Gradio 3.x)
-    chat_comps['copy_response_button'].click(
-        fn=trigger_copy_js, # Call the Python function to generate JS
-        inputs=[chat_comps['llm_response_display']], # Pass the text content
-        outputs=[chat_comps['js_trigger_output']] # Target the dummy HTML component
-    )
+    # Copy: handled client-side by the response Textbox's built-in copy button (buttons=["copy"])
 
 
     # -- App Settings Tab Wiring --
@@ -411,6 +411,12 @@ with gr.Blocks(title="ArtAgents", theme=theme_object) as demo:
         fn=generate_captions_for_all,
         inputs=[ caption_image_paths_state, caption_data_state, caption_comps['caption_agent_selector'], caption_comps['caption_model_selector'], caption_comps['caption_generate_mode'], settings_state, models_data_state, limiters_data_state, teams_data_state, chat_comps['loaded_file_agents_state'], history_list_state, session_history_state, ],
         outputs=[ caption_comps['captions_status_display'], caption_data_state, caption_comps['captions_caption_display'], session_history_state ]
+    ).then(
+        # The batch returns the LAST image's caption; show the caption of the image that is
+        # actually selected, so "Save THIS Caption" can't write it into the wrong .txt file.
+        fn=lambda selected, captions: (captions or {}).get(selected, "") if selected else "",
+        inputs=[caption_selected_item_state, caption_data_state],
+        outputs=[caption_comps['captions_caption_display']]
     )
 
 
@@ -426,10 +432,18 @@ atexit.register(on_exit)
 if __name__ == "__main__":
     print("Initializing ArtAgents...")
     # Set launch parameters
+    # Security notes:
+    # - No `allowed_paths`: gallery images are served as cached thumbnails, so
+    #   Gradio never needs direct access to your folders (the previous
+    #   allowed_paths=["/"] let anyone who could reach the app read any file).
+    # - Keep the default localhost binding. Only use share=True or
+    #   server_name="0.0.0.0" together with `auth=("user", "password")`, because
+    #   the app reads and writes files in folders typed into the UI.
     demo.launch(
-        allowed_paths=["/"] # <-- to allow access to all paths when running locally
-        # share=True # For public link
-        # server_name="0.0.0.0" # For network access
+        theme=theme_object, # Gradio 6: theme moved from gr.Blocks() to launch()
+        max_file_size="25mb", # Agent .json files and single images are small
+        # share=True # For public link (add auth!)
+        # server_name="0.0.0.0" # For network access (add auth!)
         # debug=True # Enable Gradio debug mode if needed
     )
     print("Gradio App shutdown.")

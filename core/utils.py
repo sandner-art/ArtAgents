@@ -1,4 +1,5 @@
 # ArtAgent/core/utils.py
+import html as html_lib
 import json
 import os
 import gradio as gr # Needed for theme mapping
@@ -97,8 +98,17 @@ def get_theme_object(theme_name: str):
     return AVAILABLE_THEMES.get(theme_name, gr.themes.Default())
 
 
+def esc(value) -> str:
+    """HTML-escapes any value for safe inclusion in gr.HTML output."""
+    return html_lib.escape(str(value), quote=True)
+
+
 def format_json_to_html_table(data):
-    """Formats a dictionary (like agent roles) into an HTML table."""
+    """
+    Formats a dictionary (like agent roles) into an HTML table.
+    All keys and values are HTML-escaped, so markup inside role files is shown
+    as text instead of being rendered/executed in the Info tab.
+    """
     if not isinstance(data, dict):
         return "<p>Invalid data format for table generation.</p>"
     # --- (Implementation remains the same) ---
@@ -110,19 +120,19 @@ def format_json_to_html_table(data):
     html += "</tr></thead>"
     html += "<tbody>"
     for key, value in data.items():
-        html += f"<tr><td style='border: 1px solid #ddd; padding: 8px; vertical-align: top;'><strong>{key}</strong></td>"
+        html += f"<tr><td style='border: 1px solid #ddd; padding: 8px; vertical-align: top;'><strong>{esc(key)}</strong></td>"
         display_value = ""
         if isinstance(value, dict):
             desc = value.get('description', 'N/A')
             opts = value.get('ollama_api_options')
-            display_value = f"<p><i>Description:</i> {desc}</p>"
+            display_value = f"<p><i>Description:</i> {esc(desc)}</p>"
             if opts:
-                 display_value += "<p><i>Options:</i><pre><code>" + json.dumps(opts, indent=2) + "</code></pre></p>"
+                 display_value += "<p><i>Options:</i><pre><code>" + esc(json.dumps(opts, indent=2)) + "</code></pre></p>"
         elif isinstance(value, str):
-             display_value = value
+             display_value = esc(value)
         else:
-             try: display_value = json.dumps(value, indent=2)
-             except TypeError: display_value = str(value)
+             try: display_value = esc(json.dumps(value, indent=2))
+             except TypeError: display_value = esc(value)
         html += f"<td style='border: 1px solid #ddd; padding: 8px; word-wrap: break-word;'>{display_value}</td></tr>"
     html += "</tbody></table>"
     return html

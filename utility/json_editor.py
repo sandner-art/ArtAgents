@@ -1,9 +1,15 @@
 import gradio as gr
 import json
+import os
+
+
+def _path(file_obj):
+    """Gradio 4+ passes a filepath string; older versions passed an object with .name."""
+    return file_obj if isinstance(file_obj, (str, os.PathLike)) else file_obj.name
 
 def load_json(file_path):
     try:
-        with open(file_path.name, 'r') as file:
+        with open(_path(file_path), 'r', encoding='utf-8') as file:
             data = json.load(file)
         flattened_data = flatten_json(data)
         return data, "File loaded successfully", list(flattened_data.keys()), ""
@@ -25,9 +31,9 @@ def update_value(data, selected_key):
 
 def save_json(file_path, data):
     try:
-        with open(file_path.name, 'w') as file:
+        with open(_path(file_path), 'w', encoding='utf-8') as file:
             json.dump(data, file, indent=4)
-        return f"File saved successfully: {file_path.name}"
+        return f"File saved successfully: {os.path.basename(_path(file_path))}"
     except Exception as e:
         return f"Error saving file: {str(e)}"
 
@@ -138,7 +144,8 @@ def main():
             outputs=[file_output, message]
         )
 
-    demo.launch(share=True, debug=True)
+    # Local only: share=True would publish this file editor on a public gradio.live URL.
+    demo.launch(debug=True)
 
 if __name__ == "__main__":
     main()

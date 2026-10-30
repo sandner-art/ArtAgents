@@ -1,4 +1,5 @@
 # ArtAgent/core/app_logic.py
+import copy
 import gradio as gr
 import json
 import os
@@ -10,6 +11,7 @@ import time
 
 # Import necessary functions/classes from sibling modules or agents
 from .utils import load_json, get_absolute_path, clean_agent_artifacts # Import cleaner
+from .image_utils import open_image, is_image_filename
 from . import history_manager as history
 from agents.roles_config import load_all_roles, get_role_display_name, get_actual_role_name
 from agents.ollama_agent import get_llm_response
@@ -314,11 +316,11 @@ def chat_logic(
         else:
              # Process folder with vision model (image by image)
              print(f"Processing image folder: {folder_path}")
-             confirmation_messages = []; processed_files = 0; base_prompt = prompt
+             confirmation_messages = []; processed_files = 0; skipped_files = 0; base_prompt = prompt
              try:
                  files_in_folder = sorted([
                      f for f in os.listdir(folder_path)
-                     if os.path.isfile(os.path.join(folder_path, f)) and f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'))
+                     if os.path.isfile(os.path.join(folder_path, f)) and is_image_filename(f)
                  ])
              except Exception as list_e: return f"Error listing folder: {list_e}", "\n---\n".join(current_session_history), model_name, current_session_history
 
@@ -326,8 +328,13 @@ def chat_logic(
                  file_path = os.path.join(folder_path, file_name)
                  loop_img = None # Initialize loop_img
                  try:
+                      if file_handling_option == "Skip" and os.path.exists(os.path.join(folder_path, f"{os.path.splitext(file_name)[0]}.txt")):
+                          # Don't spend a model call on an image whose caption would be discarded anyway
+                          confirmation_messages.append(f"  - {file_name}: Skipped (caption file exists)")
+                          skipped_files += 1
+                          continue
                       print(f"  Processing file: {file_name}")
-                      loop_img = Image.open(file_path)
+                      loop_img = open_image(file_path) # Restricted to PNG/JPEG/BMP/GIF/WEBP decoders
                       image_prompt = f"{base_prompt}\nImage Context: Analyzing '{file_name}'\n"
                       img_response = get_llm_response(
                            role=actual_role_name, prompt=image_prompt, model=model_name, settings=current_settings,
@@ -387,8 +394,9 @@ def chat_logic(
                           try: loop_img.close()
                           except Exception as e_close: print(f"  Warning: Error closing loop image {file_name}: {e_close}")
 
-             if processed_files == 0: final_response = "No valid image files found or processed in the directory."
-             else: final_response = f"Folder processing complete ({processed_files} files):\n" + "\n".join(confirmation_messages)
+             if not files_in_folder: final_response = "No supported image files found in the directory."
+             elif processed_files == 0 and skipped_files == 0: final_response = "No images could be processed:\n" + "\n".join(confirmation_messages)
+             else: final_response = f"Folder processing complete ({processed_files} processed, {skipped_files} skipped):\n" + "\n".join(confirmation_messages)
 
     elif single_image_input is None and (not folder_path or not os.path.isdir(folder_path)):
         # Text-Only Call (No image passed)
@@ -406,41 +414,6 @@ def chat_logic(
     # Return response text, session history text, model name, and updated session list
     # Cleaning happens in execute_chat_or_team router
     return final_response, "\n---\n".join(current_session_history), model_name, current_session_history
-
-# --- Callback for Copy JS ---
-def trigger_copy_js(text_to_copy):
-    """
-    Returns a JavaScript string that copies the provided text to the clipboard
-    when executed by the Gradio frontend via gr.update().
-    Includes basic escaping for embedding within a JS template literal.
-    """
-    if not text_to_copy:
-        print("Copy Button: No text provided to copy.")
-        return gr.update(value="<script>console.warn('Copy button: No text provided.');</script>")
-
-    # Escape backticks, backslashes, and `${}` sequences needed for JS template literals
-    escaped_text = text_to_copy.replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${')
-
-    # Construct the JavaScript code string
-    copy_js_code = f"""
-<script>
-    (async () => {{
-        const textToCopy = `{escaped_text}`; // Use template literal with escaped text
-        try {{
-            await navigator.clipboard.writeText(textToCopy);
-            console.log('Text copied to clipboard successfully!');
-            // Example feedback (requires button ID 'copy-response-button-id' - not set currently)
-            // const btn = document.getElementById('copy-response-button-id');
-            // if(btn) {{ btn.textContent = 'Copied!'; setTimeout(() => {{ btn.textContent = '📋 Copy'; }}, 1500); }}
-        }} catch (err) {{
-            console.error('Failed to copy text to clipboard: ', err);
-        }}
-    }})(); // Immediately invoke the async function
-</script>
-"""
-    # Return the JS wrapped in gr.update targeting the dummy HTML component
-    return gr.update(value=copy_js_code)
-
 
 # --- UI Callbacks ---
 
@@ -471,15 +444,28 @@ def clear_session_history_callback(session_history_list_state):
     return "", [] # Match outputs = [display, state]
 
 
+MAX_AGENT_FILE_BYTES = 1_000_000 # Agent definitions are small; refuse anything bigger
+
+
 def handle_agent_file_upload(uploaded_file):
-    """Processes uploaded agent JSON file. Returns dict, filename, update obj for dropdown."""
+    """
+    Processes an uploaded agent JSON file.
+
+    Returns:
+        tuple: (valid_agents_dict, loaded_filename_or_None) matching the two
+               outputs wired in app.py. Dropdowns are refreshed by the chained .then().
+    """
     if uploaded_file is None:
         print("Agent file upload cleared.")
-        return {}, None, gr.update() # Return update obj to trigger .then()
+        return {}, None
 
     try:
-        file_path = uploaded_file.name; file_basename = os.path.basename(file_path)
+        # Gradio 4+ passes a filepath string; older versions passed a tempfile wrapper with .name
+        file_path = uploaded_file if isinstance(uploaded_file, (str, os.PathLike)) else uploaded_file.name
+        file_basename = os.path.basename(file_path)
         print(f"Processing uploaded agent file: {file_basename}")
+        if os.path.getsize(file_path) > MAX_AGENT_FILE_BYTES:
+            raise ValueError(f"File is larger than {MAX_AGENT_FILE_BYTES // 1000} KB.")
         with open(file_path, 'r', encoding='utf-8') as f: content = f.read().strip()
         if not content: raise ValueError("Uploaded agent file is empty.")
         loaded_agents = json.loads(content)
@@ -487,14 +473,15 @@ def handle_agent_file_upload(uploaded_file):
         # Basic validation
         valid_agents = {}
         for key, value in loaded_agents.items():
-            if isinstance(value, dict) and 'description' in value: valid_agents[key] = value
+            if isinstance(value, dict) and isinstance(value.get('description'), str): valid_agents[str(key)] = value
             else: print(f"Warning: Agent '{key}' in file '{file_basename}' skipped (invalid format).")
         if not valid_agents: raise ValueError("No valid agent definitions found.")
         print(f"Successfully loaded {len(valid_agents)} agent(s) from {file_basename}.")
-        # Return loaded dict, base filename, and trigger dropdown update via .then()
-        return valid_agents, file_basename, gr.Dropdown.update() # Return update obj
-    except (json.JSONDecodeError, ValueError) as e: error_msg = f"Invalid Agent File: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
-    except Exception as e: error_msg = f"Error processing agent file: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None, gr.Dropdown.update()
+        return valid_agents, file_basename
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
+        error_msg = f"Invalid Agent File: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None
+    except Exception as e:
+        error_msg = f"Error processing agent file: {e}"; print(error_msg); gr.Warning(error_msg); return {}, None
 
 
 def load_profile_options_callback(profile_name_to_load, all_profiles_data_state, ordered_option_keys_state):
@@ -602,7 +589,7 @@ def load_team_for_editing(team_name_to_load, all_teams_data_state):
         error_state = {"name": team_name_to_load, "description": "Error: Team data not found.", "steps": [], "assembly_strategy": "concatenate"}
         return team_name_to_load, "Error: Team data not found.", [], "concatenate", error_state
 
-    steps = team_data.get("steps", [])
+    steps = copy.deepcopy(team_data.get("steps", [])) # Editor gets its own copy of the steps
     if not isinstance(steps, list): steps = []
 
     editor_state = {
@@ -628,7 +615,8 @@ def add_step_to_editor(agent_role_display_name_to_add, current_editor_state):
         print("Add Step: No agent selected."); gr.Warning("Please select an agent role to add.")
         return current_editor_state, gr.update()
 
-    editor_state = current_editor_state.copy() if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
+    # Deep copy: the steps list must not be shared with the loaded team until "Save" is pressed
+    editor_state = copy.deepcopy(current_editor_state) if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
     if "steps" not in editor_state or not isinstance(editor_state["steps"], list): editor_state["steps"] = []
 
     actual_role_name = get_actual_role_name(agent_role_display_name_to_add)
@@ -640,7 +628,8 @@ def add_step_to_editor(agent_role_display_name_to_add, current_editor_state):
 
 def remove_step_from_editor(step_index_to_remove, current_editor_state):
     """Removes a step at the specified index (1-based) from the editor state."""
-    editor_state = current_editor_state.copy() if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
+    # Deep copy: the steps list must not be shared with the loaded team until "Save" is pressed
+    editor_state = copy.deepcopy(current_editor_state) if isinstance(current_editor_state, dict) else {"name": "", "description": "", "steps": [], "assembly_strategy": "concatenate"}
     steps = editor_state.get("steps", [])
     if not isinstance(steps, list): steps = []
 
@@ -668,7 +657,7 @@ def save_team_from_editor(
     team_name = team_name_in.strip()
     default_outputs = [all_teams_data_state, gr.update(), gr.update(), gr.update(), "Save failed."]
 
-    if not team_name: msg = "Team Name cannot be empty."; print(msg); gr.Error(msg); return default_outputs[0:4] + [msg]
+    if not team_name: msg = "Team Name cannot be empty."; print(msg); gr.Warning(msg); return default_outputs[0:4] + [msg]
 
     steps = current_editor_state.get("steps", [])
     if not steps: msg = f"Save Warning: Team '{team_name}' has no steps."; print(msg); gr.Warning(msg)
@@ -688,13 +677,13 @@ def save_team_from_editor(
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
         return (
             all_teams_data,
-            gr.Dropdown.update(choices=new_team_choices, value=team_name),
-            gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
-            gr.Dropdown.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
+            gr.update(choices=new_team_choices, value=team_name),
+            gr.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
+            gr.update(choices=new_chat_choices, value=f"[Team] {team_name}"),
             msg
         )
     else:
-        msg = f"Error: Failed to save team data."; print(msg); gr.Error(msg)
+        msg = f"Error: Failed to save team data."; print(msg); gr.Warning(msg)
         return default_outputs[0:4] + [msg]
 
 
@@ -732,14 +721,14 @@ def delete_team_logic(
         new_chat_choices = ["(Direct Agent Call)"] + sorted([f"[Team] {name}" for name in new_team_choices]) + role_display_choices
         return (
             all_teams_data,
-            gr.Dropdown.update(choices=new_team_choices, value=None),
-            gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"),
-            gr.Dropdown.update(choices=new_chat_choices, value="(Direct Agent Call)"),
+            gr.update(choices=new_team_choices, value=None),
+            gr.update(choices=new_chat_choices, value="(Direct Agent Call)"),
+            gr.update(choices=new_chat_choices, value="(Direct Agent Call)"),
             msg,
             clear_name, clear_desc, clear_steps, clear_strat, clear_state
         )
     else:
-        msg = f"Error: Failed to save teams after deletion."; print(msg); gr.Error(msg)
+        msg = f"Error: Failed to save teams after deletion."; print(msg); gr.Warning(msg)
         return no_change_outputs[0:4] + [msg] + no_change_outputs[5:]
 
 

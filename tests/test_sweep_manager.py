@@ -5,7 +5,7 @@ import os
 import sys
 import json
 import time
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock, call, ANY, mock_open
 
 # --- Adjust import path ---
 test_dir = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +70,14 @@ def mock_time(monkeypatch):
     monkeypatch.setattr(TIME_GMTIME_PATH, lambda: MOCK_PROTOCOL_TIMESTAMP_STRUCT)
     # Mock time.time() just in case duration calculation is tested later
     monkeypatch.setattr('core.sweep_manager.time.time', MagicMock(side_effect=[1000.0, 1010.0])) # Example start/end times
+
+
+@pytest.fixture(autouse=True)
+def mock_prompt_file_open():
+    """run_sweep appends cleaned prompts to prompts_<model>.txt via open(); keep that off the real disk."""
+    m = mock_open()
+    with patch('core.sweep_manager.open', m, create=True):
+        yield m
 
 
 # --- Tests ---
@@ -144,7 +152,27 @@ def test_run_sweep_success_no_intermediate(
     # 4. Summary
     assert "Sweep Complete" in summary
     assert "Total Runs Attempted: 8/8" in summary
-    assert f"Protocols saved to: {EXPECTED_ABS_OUTPUT_DIR}" in summary
+    assert f"Protocols and Prompt Files saved to: {EXPECTED_ABS_OUTPUT_DIR}" in summary
+    assert "Prompt Write Error" not in summary
+
+
+def test_run_sweep_writes_one_prompt_file_per_model(mock_prompt_file_open, mock_time):
+    """Successful outputs are flattened to one line and appended to prompts_<model>.txt (one handle per model)."""
+    with patch(LOAD_ALL_ROLES_PATH, return_value=MOCK_ROLES_DATA), \
+         patch(RUN_TEAM_WORKFLOW_PATH, return_value=("Line one\nLine two", [], None)), \
+         patch(SAVE_JSON_PATH, return_value=True), \
+         patch(OS_MAKEDIRS_PATH), \
+         patch(GET_ABS_PATH, return_value=EXPECTED_ABS_OUTPUT_DIR):
+        sweep_manager.run_sweep(MOCK_PROMPTS_TEXT, SELECTED_TEAMS, SELECTED_MODELS, OUTPUT_FOLDER_NAME, False, MOCK_SETTINGS, MOCK_TEAMS_DATA)
+
+    opened_paths = [c.args[0] for c in mock_prompt_file_open.call_args_list]
+    assert opened_paths == [
+        os.path.join(EXPECTED_ABS_OUTPUT_DIR, "prompts_model-sweep-1.txt"),
+        os.path.join(EXPECTED_ABS_OUTPUT_DIR, "prompts_model-sweep-2.txt"),
+    ]
+    handle = mock_prompt_file_open()
+    handle.write.assert_any_call("Line one Line two\n")
+    assert handle.write.call_count == 8 # 2 prompts x 2 teams x 2 models
 
 
 @patch(LOAD_ALL_ROLES_PATH, return_value=MOCK_ROLES_DATA)

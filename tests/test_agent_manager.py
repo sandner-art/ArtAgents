@@ -97,7 +97,8 @@ def test_run_team_workflow_concat_success(mock_get_llm, mock_add_history, mock_s
     )
 
     # Assertions on final output
-    expected_output = "--- Contribution: RoleA ---\nOutput from RoleA.\n\n--- Contribution: RoleB ---\nOutput from RoleB."
+    # 'concatenate' joins raw outputs; per-agent labels belong to 'structured_concatenate'
+    expected_output = "Output from RoleA.\n\nOutput from RoleB."
     assert final_output == expected_output
     assert intermediate is None # Not requested
 
@@ -275,7 +276,7 @@ def test_run_team_workflow_missing_role_in_step(mock_get_llm, mock_add_history, 
     )
 
     # Assembly is concat, only RoleA ran. Step 2 was skipped.
-    expected_output = "--- Contribution: RoleA ---\nOutput from RoleA."
+    expected_output = "Output from RoleA."
     assert final_output == expected_output
 
     # Check agent calls

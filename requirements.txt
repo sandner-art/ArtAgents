@@ -1,5 +1,15 @@
 # ArtAgent/requirements.txt
-gradio>=5.0.0,<6.0.0
-requests==2.31.0
-Pillow==9.5.0
-numpy
+# Requires Python 3.11+ (Pillow 13 dropped Python 3.10).
+#
+# Install in two steps (the setup scripts do this for you):
+#   pip install -r requirements.txt
+#   pip install --no-deps -r requirements-pillow.txt
+#
+# Gradio 6.16+ fixes the SSRF (gr.load proxy_url), FileExplorer and Windows path
+# traversal, cookie injection and OAuth open-redirect advisories.
+gradio==6.31.0
+# requests 2.33+ fixes the .netrc credential leak, verify=False session reuse
+# and insecure temp-file reuse advisories.
+requests==2.34.2
+numpy>=1.26,<3
+# Pillow is pinned in requirements-pillow.txt (see the note there).

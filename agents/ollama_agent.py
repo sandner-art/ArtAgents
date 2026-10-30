@@ -2,10 +2,9 @@
 
 import json
 import requests
-from PIL import Image # Keep if image processing happens here
-import io             # Keep if image processing happens here
-import base64         # Keep if image processing happens here
-import numpy as np    # Keep if image processing happens here (less likely now)
+from PIL import Image
+
+from core.image_utils import encode_image_for_ollama
 
 # Removed internal load_settings/load_roles - Assume these are passed in
 # from core.utils import load_json # Not needed if settings/roles passed
@@ -92,13 +91,8 @@ def get_llm_response(
             print(f"Processing {len(images)} image(s) for payload...")
             for i, img_object in enumerate(images):
                 if isinstance(img_object, Image.Image): # Check if it's a PIL Image
-                    buffered = io.BytesIO()
-                    # Choose format (JPEG is often smaller, PNG supports transparency)
-                    save_format = "JPEG" if img_object.mode != "RGBA" else "PNG"
-                    img_object.save(buffered, format=save_format)
-                    img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                    image_data.append(img_str)
-                    # print(f"  Processed image {i+1} ({save_format}, size: {len(img_str)} bytes)") # Reduce verbosity
+                    # PNG for transparency, JPEG otherwise; converts GIF/palette/16-bit modes safely
+                    image_data.append(encode_image_for_ollama(img_object))
                 else:
                     print(f"Warning: Item {i+1} in images list is not a PIL Image object, skipping.")
             if image_data:
@@ -114,6 +108,7 @@ def get_llm_response(
 
     # --- Perform Request ---
     llm_response = "" # Initialize default response
+    response = None
     try:
         print(f"Sending request to Ollama model '{model}' at {ollama_url}...")
         response = requests.post(ollama_url, json=payload, stream=True, timeout=180) # Longer timeout for generation
@@ -130,6 +125,13 @@ def get_llm_response(
                 # print(f"Chunk {chunk_count}: {chunk[:80]}...") # Verbose chunk logging
                 try:
                     chunk_data = json.loads(chunk)
+                    if chunk_data.get("error"):
+                        # Ollama reports problems (e.g. model not pulled, out of memory) as {"error": "..."}
+                        error_msg = f"Ollama returned an error: {chunk_data['error']}"
+                        print(error_msg)
+                        llm_response = f"⚠️ Error: {error_msg}"
+                        stream_error_occurred = True
+                        break
                     complete_response += chunk_data.get('response', "")
                     if chunk_data.get("done"):
                         print(f"Stream finished (done=true received after {chunk_count} chunks).")
@@ -169,6 +171,9 @@ def get_llm_response(
                    error_detail += f" | Response Status: {e.response.status_code} | Response Text: {e.response.text[:500]}"
          except Exception: pass
          llm_response = f"⚠️ Error communicating with Ollama: {error_detail}"
+    finally:
+        if response is not None:
+            response.close() # Release the streaming connection even if we stopped reading early
 
     # Optional: Final log of response length
     # print(f"LLM Response length: {len(llm_response)}")
