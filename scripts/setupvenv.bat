@@ -3,7 +3,7 @@ setlocal
 echo Setting up the Python virtual environment...
 
 :: Always work from the project root (the folder above this script), so the
-:: venv lands where govenv.bat looks for it (..\venv), no matter where this is run from.
+:: venv lands in the project root, where govenv.bat looks for it, no matter where this is run from.
 cd /d "%~dp0.."
 
 :: Check if python is available

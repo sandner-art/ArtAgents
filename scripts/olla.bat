@@ -1,4 +1,16 @@
-@echo off Testing Ollama API
-curl -X POST http://localhost:11434/api/generate ^
-     -H "Content-Type: application/json" ^
-     -d "{\"model\": \"impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest\", \"prompt\": \"What is the day before saturay?\", \"max_tokens\": 200}"
+@echo off
+:: Quick check that Ollama is reachable and which models are installed.
+echo Checking Ollama at http://localhost:11434 ...
+curl -s http://localhost:11434/api/version
+if %errorlevel% neq 0 (
+    echo.
+    echo Ollama is not reachable. Start the Ollama app or run "ollama serve" in another terminal.
+    pause
+    exit /b 1
+)
+echo.
+echo.
+echo Installed models:
+ollama list
+echo.
+pause

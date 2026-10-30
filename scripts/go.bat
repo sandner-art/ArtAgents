@@ -1,32 +1,31 @@
 @echo off
-echo Starting ArtAgents...
+setlocal
+echo Starting ArtAgents (system Python, no virtual environment)...
 echo IMPORTANT: Ensure the Ollama service is running separately!
 echo.
+
+:: Always work from the project root (the folder above this script)
+cd /d "%~dp0.."
 
 :: Check if python is available
 python --version >nul 2>nul
 if %errorlevel% neq 0 (
     echo ERROR: Python does not seem to be installed or added to PATH.
     pause
-    exit /b
+    exit /b 1
 )
 
-:: Check if app.py exists in parent directory
-if not exist ..\app.py (
-    echo ERROR: app.py not found in the parent directory.
+if not exist "app.py" (
+    echo ERROR: app.py not found in "%CD%".
     pause
-    exit /b
+    exit /b 1
 )
 
-:: Set the Python path to include the parent directory (project root)
-:: This helps Python find modules in core/, agents/ etc. when running from scripts/
-set PYTHONPATH=%~dp0..;%PYTHONPATH%
-echo Running app.py from project root...
-cd ..
+echo Running app.py from %CD% ...
 python app.py
-cd scripts
 
 :: Pause allows user to see output/errors before window closes
 echo.
 echo ArtAgents has finished or encountered an error.
 pause
+endlocal
