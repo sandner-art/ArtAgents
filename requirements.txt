@@ -11,5 +11,5 @@ gradio==6.31.0
 # requests 2.33+ fixes the .netrc credential leak, verify=False session reuse
 # and insecure temp-file reuse advisories.
 requests==2.34.2
-numpy>=1.26,<3
+numpy>=2.5.4,<3
 # Pillow is pinned in requirements-pillow.txt (see the note there).
