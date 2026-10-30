@@ -3,6 +3,9 @@ version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
+    # Only raise version ranges (e.g. numpy>=1.26,<3) when the new release falls outside them.
+    # Raising lower bounds needlessly can drop Python versions (numpy 2.5 requires Python 3.12+).
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5

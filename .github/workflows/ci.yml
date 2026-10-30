@@ -16,14 +16,16 @@ jobs:
       matrix:
         python-version: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          # Python 3.11 environments come with an old setuptools that pip-audit flags;
+          # it is a packaging tool, not an ArtAgents dependency, so just keep it current.
+          python -m pip install --upgrade pip setuptools
           python -m pip install -r requirements.txt
           python -m pip install --no-deps -r requirements-pillow.txt
           python -m pip install pytest pip-audit
