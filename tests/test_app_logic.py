@@ -53,6 +53,25 @@ JSON_DUMP_PATH = 'core.app_logic.json.dump' # Used by save_settings
 PIL_IMAGE_FROMARRAY_PATH = 'core.app_logic.Image.fromarray'
 PIL_IMAGE_OPEN_PATH = 'core.app_logic.open_image' # Folder processing opens images via core.image_utils.open_image
 GR_WARNING_PATH = 'core.app_logic.gr.Warning'
+STREAM_LLM_PATH = 'core.app_logic.stream_llm_response'
+ITER_TEAM_WORKFLOW_PATH = 'core.app_logic.agent_manager.iter_team_workflow'
+ITER_CHAT_LOGIC_PATH = 'core.app_logic.iter_chat_logic'
+
+
+def stream_returning(*answers):
+    """side_effect for stream_llm_response: each call streams the next answer (a partial, then the full text)."""
+    remaining = list(answers)
+
+    def _fake(**kwargs):
+        answer = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        return iter([answer[: max(1, len(answer) // 2)], answer])
+    return _fake
+
+
+def final(gen):
+    """Last item of a generator (and the list of all items)."""
+    items = list(gen)
+    return items[-1], items
 
 # Patching 'core.app_logic.os.path.X' replaces os.path.X everywhere, so side effects must
 # call the *real* functions captured here (calling os.path.splitext inside the mock recurses).
@@ -115,190 +134,325 @@ def mock_time(monkeypatch):
     """Mock time.strftime."""
     monkeypatch.setattr(TIME_STRFTIME_PATH, lambda x: MOCK_TIMESTAMP)
 
-# --- Tests for execute_chat_or_team (Router) ---
+# --- Tests for execute_chat_or_team / iter_execute_chat_or_team (Router) ---
 
-@patch(RUN_TEAM_WORKFLOW_PATH)
-@patch(LOAD_ALL_ROLES_PATH) # Mock roles loading for team execution
-def test_execute_router_team_call(mock_load_roles, mock_run_team, mock_time):
-    """Test routing to agent_manager.run_team_workflow for a team selection."""
+ROUTER_STATES = (mock_settings, mock_models_data, mock_limiters_data, mock_teams_data,
+                 None, mock_file_agents_dict, mock_history_list, mock_session_history)
+
+
+def _router_args(selection, model=ui_model_vision, image=None, clean=False, user_input=ui_user_input):
+    return (ui_folder_path, user_input, model, ui_max_tokens, ui_file_handling, ui_limiter, image,
+            ui_use_ollama_options, ui_release_model, selection, clean) + ROUTER_STATES
+
+
+def _team_events(final_text="Team Output"):
+    from core.agent_manager import TeamProgress, TeamResult
+    return [
+        TeamProgress(1, 1, "Agent1", "", "Step 1/1: Agent1"),
+        TeamProgress(1, 1, "Agent1", "Partial step text", "Step 1/1: Agent1"),
+        TeamProgress(0, 1, "", "", "Assembling final output (concatenate)..."),
+        TeamResult(final_text, ["persistent_entry_1", "team_log"], None),
+    ]
+
+
+@patch(ITER_TEAM_WORKFLOW_PATH)
+@patch(LOAD_ALL_ROLES_PATH)
+def test_execute_router_team_call(mock_load_roles, mock_iter_team, mock_time):
+    """Team selections run agent_manager.iter_team_workflow and summarise the run in the session log."""
     mock_load_roles.return_value = mock_roles_data
-    # CORRECTED: run_team_workflow returns 3 values
-    mock_run_team.return_value = ("Team Output", ["persistent_entry_1", "team_log"], None)
+    mock_iter_team.return_value = iter(_team_events())
 
-    response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(
-        ui_folder_path, ui_user_input, ui_model_vision, ui_max_tokens, ui_file_handling,
-        ui_limiter, None, ui_use_ollama_options, ui_release_model, # No single image
-        ui_role_team_a, # Select TeamA
-        False, # clean_artifacts_flag
-        mock_settings, mock_models_data, mock_limiters_data, mock_teams_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+    response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(*_router_args(ui_role_team_a))
 
     assert response == "Team Output"
     assert model_state is None # No single model state for teams
-    assert "Workflow Run: 'TeamA'" in session_hist_txt
-    assert "session_entry_1" in session_hist_txt # Check session history updated
+    assert "Workflow Run: 'TeamA'" in session_hist_txt and "session_entry_1" in session_hist_txt
     assert len(new_session_list) == 2
-
     mock_load_roles.assert_called_once_with(mock_settings, file_agents=mock_file_agents_dict)
-    mock_run_team.assert_called_once()
-    call_args, call_kwargs = mock_run_team.call_args
-    assert call_kwargs['team_name'] == "TeamA"
-    assert call_kwargs['team_definition'] == mock_teams_data['TeamA']
-    assert call_kwargs['user_input'] == ui_user_input
-    assert call_kwargs['initial_settings'] == mock_settings
-    assert call_kwargs['all_roles_data'] == mock_roles_data
-    assert call_kwargs['history_list'] == mock_history_list # Passes original persistent list
-    assert call_kwargs['worker_model_name'] == "vision-model" # Extracts name correctly
+    kwargs = mock_iter_team.call_args.kwargs
+    assert kwargs['team_name'] == "TeamA"
+    assert kwargs['team_definition'] == mock_teams_data['TeamA']
+    assert kwargs['user_input'] == ui_user_input
+    assert kwargs['initial_settings'] == mock_settings
+    assert kwargs['all_roles_data'] == mock_roles_data
+    assert kwargs['history_list'] == mock_history_list
+    assert kwargs['worker_model_name'] == "vision-model" # ' (VISION)' suffix resolved
+    assert kwargs['worker_model_has_vision'] is True
+    assert kwargs['single_image_input'] is None
 
 
-@patch('core.app_logic.chat_logic') # Mock chat_logic function itself
-def test_execute_router_agent_call(mock_chat_logic, mock_time):
-    """Test routing to chat_logic for a single agent selection."""
-    mock_chat_logic.return_value = ("Agent Output", "session_entry_1\n---\nagent_log", "Agent1", ["session_entry_1", "agent_log"])
+@patch(ITER_TEAM_WORKFLOW_PATH)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_iter_router_team_streams_progress_and_conversation(mock_load_roles, mock_iter_team, mock_time):
+    mock_iter_team.return_value = iter(_team_events("Final team text"))
+    last, items = final(app_logic.iter_execute_chat_or_team(*_router_args(ui_role_team_a)))
+    responses = [item[0] for item in items]
+    assert responses[0] == "⏳ Team 'TeamA' · Step 1/1: Agent1"
+    assert responses[1] == "⏳ Team 'TeamA' · Step 1/1: Agent1\n\nPartial step text"
+    assert "Assembling final output" in responses[2]
+    assert all(item[4] is None for item in items[:-1]) # No conversation while streaming
+    response, _, model_state, session_list, conversation = last
+    assert response == "Final team text"
+    assert conversation["model"] == "vision-model"
+    assert conversation["system"] == app_logic.REFINER_SYSTEM_PROMPT
+    assert conversation["messages"][0] == {"role": "user", "content": f"Create the final output for this request: {ui_user_input}"}
+    assert conversation["messages"][-1] == {"role": "assistant", "content": "Final team text"}
 
-    response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(
-        ui_folder_path, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling,
-        ui_limiter, None, ui_use_ollama_options, ui_release_model, # No single image
-        ui_role_agent1, # Select Agent1
-        False, # clean_artifacts_flag
-        mock_settings, mock_models_data, mock_limiters_data, mock_teams_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
 
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_team_run_with_numpy_image_does_not_crash(mock_load_roles, mock_time):
+    """Regression for 'The truth value of an array with more than one element is ambiguous'."""
+    with patch('core.agent_manager.stream_llm_response', side_effect=lambda **kw: iter(["step out"])) as mock_stream, \
+         patch('core.agent_manager.history.add_to_history', side_effect=lambda h, e: (h or []) + [e]):
+        response, _, _, _ = app_logic.execute_chat_or_team(*_router_args(ui_role_team_a, image=ui_single_image_np))
+    assert response == "step out"
+    sent = mock_stream.call_args.kwargs["images"]
+    assert len(sent) == 1 and isinstance(sent[0], Image.Image)
+
+
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_team_run_unknown_model(mock_load_roles, mock_time):
+    response, *_ = app_logic.execute_chat_or_team(*_router_args(ui_role_team_a, model="ghost-model"))
+    assert response == "Error: Could not determine worker model name for team from input 'ghost-model'."
+
+
+def test_team_run_without_models_data(mock_time):
+    args = list(_router_args(ui_role_team_a))
+    args[12] = [] # models_data_state
+    response, *_ = app_logic.execute_chat_or_team(*args)
+    assert response == "Error: Models data state is missing."
+
+
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_team_run_bad_image_type(mock_load_roles, mock_time):
+    response, *_ = app_logic.execute_chat_or_team(*_router_args(ui_role_team_a, image="not-an-image"))
+    assert response.startswith("Error processing input image:")
+
+
+@patch(ITER_CHAT_LOGIC_PATH)
+def test_execute_router_agent_call(mock_iter_chat, mock_time):
+    """Single-agent selections are routed to iter_chat_logic."""
+    mock_iter_chat.return_value = iter([
+        ("Agent Out", "s", "text-model", ["session_entry_1"], None),
+        ("Agent Output", "session_entry_1\n---\nagent_log", "text-model", ["session_entry_1", "agent_log"], {"messages": []}),
+    ])
+    response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(*_router_args(ui_role_agent1, model=ui_model_text))
     assert response == "Agent Output"
-    assert model_state == "Agent1" # chat_logic returns the model used
-    assert "session_entry_1" in session_hist_txt
-    assert "agent_log" in session_hist_txt
-    assert len(new_session_list) == 2
-    mock_chat_logic.assert_called_once()
-    call_args, call_kwargs = mock_chat_logic.call_args
-    assert call_kwargs['role_display_name'] == ui_role_agent1
-    assert call_kwargs['model_with_vision'] == ui_model_text
+    assert model_state == "text-model"
+    assert "agent_log" in session_hist_txt and len(new_session_list) == 2
+    kwargs = mock_iter_chat.call_args.kwargs
+    assert kwargs['role_display_name'] == ui_role_agent1
+    assert kwargs['model_with_vision'] == ui_model_text
+    assert kwargs['session_history_list_state'] == mock_session_history
 
 
-@patch('core.app_logic.chat_logic')
-def test_execute_router_cleans_artifacts_when_requested(mock_chat_logic, mock_time):
-    """clean_artifacts_flag=True strips '--- Output from Agent: ... ---' headers from the final text."""
+@patch(ITER_CHAT_LOGIC_PATH)
+def test_execute_router_cleans_artifacts_when_requested(mock_iter_chat, mock_time):
+    """clean_artifacts_flag=True strips '--- Output from Agent: ... ---' headers from the final text (and conversation)."""
     raw = "--- Output from Agent: Agent1 ---\nA red chair.\n--- Output from Agent: Agent2 ---\nOn a beach."
-    mock_chat_logic.return_value = (raw, "", "text-model", [])
-    args = (ui_folder_path, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling, ui_limiter, None,
-            ui_use_ollama_options, ui_release_model, ui_role_agent1)
-    states = (mock_settings, mock_models_data, mock_limiters_data, mock_teams_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
+    conversation = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": raw}]}
+    mock_iter_chat.side_effect = lambda **kw: iter([(raw, "", "text-model", [], copy.deepcopy(conversation))])
 
-    cleaned, *_ = app_logic.execute_chat_or_team(*args, True, *states)
-    untouched, *_ = app_logic.execute_chat_or_team(*args, False, *states)
+    last, items = final(app_logic.iter_execute_chat_or_team(*_router_args(ui_role_agent1, model=ui_model_text, clean=True)))
+    untouched, *_ = app_logic.execute_chat_or_team(*_router_args(ui_role_agent1, model=ui_model_text, clean=False))
 
-    assert cleaned == "A red chair.\nOn a beach."
+    assert len(items) == 2 # Raw final, then the cleaned version
+    assert last[0] == "A red chair.\nOn a beach."
+    assert last[4]["messages"][-1]["content"] == "A red chair.\nOn a beach."
     assert untouched == raw
 
 
-def test_execute_router_direct_agent_call(mock_time):
-    """Test selecting the '(Direct Agent Call)' option."""
-    response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(
-        ui_folder_path, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling,
-        ui_limiter, None, ui_use_ollama_options, ui_release_model,
-        "(Direct Agent Call)", # Select direct call
-        False, # clean_artifacts_flag
-        mock_settings, mock_models_data, mock_limiters_data, mock_teams_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
-    assert "Please select a specific Agent or an Agent Team" in response
-    assert model_state is None
-    assert session_hist_txt == "session_entry_1" # History unchanged
-    assert new_session_list == mock_session_history # History unchanged
+@patch(ITER_CHAT_LOGIC_PATH)
+def test_cleaning_skips_error_responses(mock_iter_chat, mock_time):
+    error = "⚠️ Error: --- Output from Agent: x ---"
+    mock_iter_chat.return_value = iter([(error, "", None, [], None)])
+    last, items = final(app_logic.iter_execute_chat_or_team(*_router_args(ui_role_agent1, clean=True)))
+    assert last[0] == error and len(items) == 1
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_execute_router_direct_agent_call(mock_load_roles, mock_add_history, mock_time):
+    """'(Direct Agent Call)' sends the prompt straight to the model, with no agent persona."""
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("Plain model answer")) as mock_stream:
+        response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(
+            *_router_args("(Direct Agent Call)", model=ui_model_text))
+    assert response == "Plain model answer"
+    assert model_state == "text-model"
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs["system"] is None # No persona, no limiter
+    assert kwargs["role"] == ""
+    assert kwargs["prompt"] == ui_user_input
+    assert "Role: (Direct Model Call)" in new_session_list[-1]
+    assert len(new_session_list) == 2
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_direct_call_with_limiter_uses_limiter_as_system(mock_load_roles, mock_add_history, mock_time):
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("x")) as mock_stream:
+        app_logic.chat_logic(None, "(Direct Agent Call)", ui_user_input, ui_model_text, 1000, ui_file_handling, "SDXL", None,
+                             False, False, mock_settings, mock_models_data, mock_limiters_data, None,
+                             mock_file_agents_dict, mock_history_list, mock_session_history)
+    assert mock_stream.call_args.kwargs["system"] == "SDXL style:"
+    assert mock_stream.call_args.kwargs["max_tokens"] == 200
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_empty_selection_is_a_direct_call(mock_load_roles, mock_add_history, mock_time):
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("answer")) as mock_stream:
+        response, *_ = app_logic.execute_chat_or_team(*_router_args(None, model=ui_model_text))
+    assert response == "answer" and mock_stream.call_args.kwargs["system"] is None
 
 
 def test_execute_router_invalid_team_name(mock_time):
     """Test selecting a team name that doesn't exist in the state."""
     response, session_hist_txt, model_state, new_session_list = app_logic.execute_chat_or_team(
-        ui_folder_path, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling,
-        ui_limiter, None, ui_use_ollama_options, ui_release_model,
-        "[Team] NonExistentTeam", # Select non-existent team
-        False, # clean_artifacts_flag
-        mock_settings, mock_models_data, mock_limiters_data, mock_teams_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+        *_router_args("[Team] NonExistentTeam", model=ui_model_text))
     assert "Error: Selected Agent Team 'NonExistentTeam' definition not found" in response
     assert model_state is None
-    assert session_hist_txt == "session_entry_1" # History unchanged
-    assert new_session_list == mock_session_history # History unchanged
+    assert session_hist_txt == "session_entry_1"
+    assert new_session_list == mock_session_history
+
+
+def test_execute_router_without_any_output(mock_time):
+    """The blocking wrapper never returns None, even if the stream produced nothing."""
+    with patch(ITER_CHAT_LOGIC_PATH, return_value=iter([])):
+        assert app_logic.execute_chat_or_team(*_router_args(ui_role_agent1)) == ("Error: Processing failed.", "", None, [])
 
 
 # --- Tests for chat_logic (Single Agent Core Logic) ---
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
 @patch(RELEASE_MODEL_PATH)
-@patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x) # Simple mock: returns input display name
-def test_chat_logic_text_only(mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
-    """Test chat_logic in text-only mode (no folder, no single image)."""
+def test_chat_logic_text_only(mock_get_actual_name, mock_load_roles, mock_release_model, mock_add_history, mock_time):
+    """Text-only mode: the agent persona goes into the system prompt, the user input is the user turn."""
     mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.return_value = "LLM Text Response"
 
-    response, session_hist_txt, model_state, new_session_list = app_logic.chat_logic(
-        None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens, # No folder path
-        ui_file_handling, ui_limiter, None, ui_use_ollama_options, False, # No single image, no release model
-        mock_settings, mock_models_data, mock_limiters_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("LLM Text Response")) as mock_stream:
+        response, session_hist_txt, model_state, new_session_list = app_logic.chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens, # No folder path
+            ui_file_handling, ui_limiter, None, ui_use_ollama_options, False, # No single image, no release model
+            mock_settings, mock_models_data, mock_limiters_data,
+            None, mock_file_agents_dict, mock_history_list, mock_session_history
+        )
 
     assert response == "LLM Text Response"
-    assert model_state == "text-model" # Correct model name returned
+    assert model_state == "text-model"
     assert session_hist_txt.endswith("---\nTimestamp: "+MOCK_TIMESTAMP+"\nRole: Agent1\nModel: text-model\nInput: Test user query\nImage: [None - Text Only]\nResponse:\nLLM Text Response\n---\n")
     assert len(new_session_list) == 2 # Original + new entry
 
     mock_get_actual_name.assert_called_once_with(ui_role_agent1)
     mock_load_roles.assert_called_once_with(mock_settings, file_agents=mock_file_agents_dict)
-    mock_release_model.assert_not_called() # release_model_on_change was False
-    mock_get_llm.assert_called_once()
-    call_args, call_kwargs = mock_get_llm.call_args
-    assert call_kwargs['role'] == ui_role_agent1 # Uses actual role name (mocked here)
-    assert call_kwargs['model'] == ui_model_text
-    assert call_kwargs['settings'] == mock_settings
-    assert call_kwargs['roles_data'] == mock_roles_data
-    assert call_kwargs['images'] is None # No images for text only
-    assert call_kwargs['max_tokens'] == ui_max_tokens # Uses UI value as no limiter
-    assert "Role: Agent1 - Does agent things." in call_kwargs['prompt'] # Check prompt construction
-    assert "User Input: Test user query" in call_kwargs['prompt']
-    mock_add_history.assert_called_once() # Called once for the single interaction
-    # Removed assert False
+    mock_release_model.assert_not_called()
+    mock_stream.assert_called_once()
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs['role'] == ui_role_agent1
+    assert kwargs['model'] == ui_model_text
+    assert kwargs['settings'] == mock_settings
+    assert kwargs['roles_data'] == mock_roles_data
+    assert kwargs['images'] is None
+    assert kwargs['max_tokens'] == ui_max_tokens
+    assert kwargs['use_global_options'] is ui_use_ollama_options # UI checkbox is honoured
+    assert kwargs['prompt'] == ui_user_input
+    assert kwargs['system'] == "You are acting as the agent 'Agent1'.\n\nDoes agent things."
+    mock_add_history.assert_called_once()
 
 
-@patch(PIL_IMAGE_FROMARRAY_PATH, return_value=MagicMock(spec=Image)) # Mock Image creation
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+@patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
+def test_iter_chat_logic_streams_and_returns_conversation(mock_get_actual_name, mock_load_roles, mock_add_history, mock_time):
+    with patch(STREAM_LLM_PATH, side_effect=lambda **kw: iter(["Hel", "Hello", "Hello there"])):
+        last, items = final(app_logic.iter_chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling, ui_limiter, None,
+            ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None,
+            mock_file_agents_dict, mock_history_list, mock_session_history))
+    assert [i[0] for i in items] == ["Hel", "Hello", "Hello there", "Hello there"]
+    assert all(i[4] is None for i in items[:-1])
+    assert len(items[0][3]) == 1 # Session log only grows once the answer is complete
+    conversation = last[4]
+    assert conversation == {
+        "model": "text-model", "role": "Agent1",
+        "system": "You are acting as the agent 'Agent1'.\n\nDoes agent things.",
+        "messages": [{"role": "user", "content": ui_user_input}, {"role": "assistant", "content": "Hello there"}],
+    }
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+@patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
+def test_iter_chat_logic_error_gives_no_conversation(mock_get_actual_name, mock_load_roles, mock_add_history, mock_time):
+    with patch(STREAM_LLM_PATH, side_effect=lambda **kw: iter(["⚠️ Error: model not found"])):
+        last, _ = final(app_logic.iter_chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling, ui_limiter, None,
+            ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None,
+            mock_file_agents_dict, mock_history_list, mock_session_history))
+    assert last[0] == "⚠️ Error: model not found"
+    assert last[4] is None # Refine must not continue from an error
+
+
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
 @patch(RELEASE_MODEL_PATH)
-@patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
-def test_chat_logic_single_image(mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_pil_fromarray, mock_time):
-    """Test chat_logic with a single image input."""
+def test_chat_logic_single_image(mock_get_actual_name, mock_load_roles, mock_release_model, mock_add_history, mock_time):
+    """A numpy image from the UI is converted to PIL and sent with the prompt to a vision model."""
     mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.return_value = "LLM Image Response"
-    mock_pil_image_instance = mock_pil_fromarray.return_value # Get the mocked image instance
 
-    response, session_hist_txt, model_state, new_session_list = app_logic.chat_logic(
-        None, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, # No folder path
-        ui_file_handling, ui_limiter, ui_single_image_np, # Pass numpy image
-        ui_use_ollama_options, False, # No release model
-        mock_settings, mock_models_data, mock_limiters_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("LLM Image Response")) as mock_stream:
+        response, session_hist_txt, model_state, new_session_list = app_logic.chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens,
+            ui_file_handling, ui_limiter, ui_single_image_np,
+            ui_use_ollama_options, False,
+            mock_settings, mock_models_data, mock_limiters_data,
+            None, mock_file_agents_dict, mock_history_list, mock_session_history
+        )
 
     assert response == "LLM Image Response"
-    assert model_state == "vision-model" # Assert the base name
-    assert "Image: [Image Data Sent]" in session_hist_txt # Check history entry
+    assert model_state == "vision-model"
+    assert "Image: [Image Data Sent]" in session_hist_txt
     assert len(new_session_list) == 2
-
-    mock_pil_fromarray.assert_called_once() # Check PIL was called
-    mock_get_llm.assert_called_once()
-    call_args, call_kwargs = mock_get_llm.call_args
-    assert call_kwargs['model'] == "vision-model" # Check base model name passed
-    assert isinstance(call_kwargs['images'], list)
-    assert len(call_kwargs['images']) == 1
-    assert call_kwargs['images'][0] == mock_pil_image_instance # Check image object passed
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs['model'] == "vision-model"
+    assert kwargs['prompt'] == ui_user_input
+    assert len(kwargs['images']) == 1
+    assert isinstance(kwargs['images'][0], Image.Image) and kwargs['images'][0].size == (10, 10)
     mock_add_history.assert_called_once()
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+@patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
+def test_chat_logic_image_with_non_vision_model_falls_back_to_text(mock_get_actual_name, mock_load_roles, mock_add_history, mock_time):
+    """Used to return 'Processing...' forever; now the prompt is sent as text only."""
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("Text answer")) as mock_stream:
+        response, _, model_state, new_session_list = app_logic.chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens,
+            ui_file_handling, ui_limiter, ui_single_image_np,
+            ui_use_ollama_options, False,
+            mock_settings, mock_models_data, mock_limiters_data,
+            None, mock_file_agents_dict, mock_history_list, mock_session_history
+        )
+    assert response == "Text answer"
+    assert model_state == "text-model"
+    assert mock_stream.call_args.kwargs['images'] is None
+    assert "Image: [Single Image Ignored - No Vision]" in new_session_list[-1]
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+@patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
+def test_chat_logic_accepts_pil_image(mock_get_actual_name, mock_load_roles, mock_add_history, mock_time):
+    pil = Image.new("RGB", (5, 5))
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("ok")) as mock_stream:
+        app_logic.chat_logic(None, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, ui_file_handling,
+                             ui_limiter, pil, False, False, mock_settings, mock_models_data, mock_limiters_data, None,
+                             mock_file_agents_dict, mock_history_list, mock_session_history)
+    assert mock_stream.call_args.kwargs['images'] == [pil]
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
@@ -355,57 +509,61 @@ def test_chat_logic_folder_processing_skip(
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
 @patch(RELEASE_MODEL_PATH)
-@patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
 def test_chat_logic_model_release(
-    mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
-    """Test that release_model is called when settings require it."""
+    mock_get_actual_name, mock_load_roles, mock_release_model, mock_add_history, mock_time):
+    """'Unload Previous Model' releases the model used in the previous run (from model_state)."""
     mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.return_value = "Response"
-    previous_model = "old-text-model" # Tracker state
-    current_model_ui = ui_model_text # New model selected
-    # Update settings for this test
+    previous_model = "old-text-model"
     settings_release = {**mock_settings, "release_model_on_change": True}
 
-    app_logic.chat_logic(
-        None, ui_role_agent1, ui_user_input, current_model_ui, ui_max_tokens,
-        ui_file_handling, ui_limiter, None, ui_use_ollama_options, True, # release_on_change UI input
-        settings_release, # Pass modified settings
-        mock_models_data, mock_limiters_data,
-        previous_model, # Pass previous model from tracker state
-        mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("Response")):
+        app_logic.chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens,
+            ui_file_handling, ui_limiter, None, ui_use_ollama_options, True, # release_on_change UI input
+            settings_release, mock_models_data, mock_limiters_data,
+            previous_model, # Model used in the last run
+            mock_file_agents_dict, mock_history_list, mock_session_history
+        )
 
-    # Check that release_model was called with the *previous* model name
-    mock_release_model.assert_called_once_with(previous_model, mock_settings["ollama_url"])
+    mock_release_model.assert_called_once_with(previous_model, settings_release)
+
+
+@pytest.mark.parametrize("previous", [None, "text-model", "text-model (VISION)"])
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(RELEASE_MODEL_PATH)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+@patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
+def test_chat_logic_no_release_for_same_or_missing_model(mock_get_actual_name, mock_load_roles, mock_release_model, mock_add_history, previous, mock_time):
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("Response")):
+        app_logic.chat_logic(None, ui_role_agent1, ui_user_input, ui_model_text, ui_max_tokens, ui_file_handling,
+                             ui_limiter, None, False, True, mock_settings, mock_models_data, mock_limiters_data,
+                             previous, mock_file_agents_dict, mock_history_list, mock_session_history)
+    mock_release_model.assert_not_called()
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
 def test_chat_logic_limiter(
-    mock_get_actual_name, mock_load_roles, mock_get_llm, mock_add_history, mock_time):
-    """Test that limiters affect max_tokens and prompt."""
+    mock_get_actual_name, mock_load_roles, mock_add_history, mock_time):
+    """Limiters cap max_tokens and add their prompt format to the system prompt."""
     mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.return_value = "Response"
     limiter_choice = "SDXL" # Defined in mock_limiters_data with tokens=200
-    high_ui_max_tokens = 1000
 
-    app_logic.chat_logic(
-        None, ui_role_agent1, ui_user_input, ui_model_text, high_ui_max_tokens,
-        ui_file_handling, limiter_choice, None, ui_use_ollama_options, False,
-        mock_settings, mock_models_data, mock_limiters_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("Response")) as mock_stream:
+        app_logic.chat_logic(
+            None, ui_role_agent1, ui_user_input, ui_model_text, 1000,
+            ui_file_handling, limiter_choice, None, ui_use_ollama_options, False,
+            mock_settings, mock_models_data, mock_limiters_data,
+            None, mock_file_agents_dict, mock_history_list, mock_session_history
+        )
 
-    mock_get_llm.assert_called_once()
-    call_args, call_kwargs = mock_get_llm.call_args
-    # Check that max_tokens passed to agent is the limiter's value (200)
-    assert call_kwargs['max_tokens'] == 200
-    # Check that the limiter's prompt format is included
-    assert mock_limiters_data[limiter_choice]["limiter_prompt_format"] in call_kwargs['prompt']
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs['max_tokens'] == 200
+    assert kwargs['system'] == "You are acting as the agent 'Agent1'.\n\nDoes agent things.\n\nSDXL style:"
+    assert kwargs['prompt'] == ui_user_input
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
@@ -522,34 +680,32 @@ def test_chat_logic_folder_processing_prepend(
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
 @patch(RELEASE_MODEL_PATH)
-@patch(GET_LLM_RESPONSE_PATH)
 @patch(LOAD_ALL_ROLES_PATH)
 @patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
 @patch(OS_PATH_ISDIR_PATH, return_value=True) # Folder exists
 def test_chat_logic_folder_no_vision_model(
-    mock_isdir, mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
-    """Test folder processing skips images if model lacks vision."""
+    mock_isdir, mock_get_actual_name, mock_load_roles, mock_release_model, mock_add_history, mock_time):
+    """A folder with a non-vision model runs once as a text-only call."""
     mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.return_value = "LLM Text Response (Folder Ignored)"
 
-    response, _, model_state, new_session_list = app_logic.chat_logic(
-        ui_folder_path, ui_role_agent1, ui_user_input, ui_model_text, # Use TEXT model
-        ui_max_tokens, "Skip", ui_limiter, None, ui_use_ollama_options, False,
-        mock_settings, mock_models_data, mock_limiters_data,
-        None, mock_file_agents_dict, mock_history_list, mock_session_history
-    )
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("LLM Text Response (Folder Ignored)")) as mock_stream, \
+         patch(GET_LLM_RESPONSE_PATH) as mock_get_llm:
+        response, _, model_state, new_session_list = app_logic.chat_logic(
+            ui_folder_path, ui_role_agent1, ui_user_input, ui_model_text,
+            ui_max_tokens, "Skip", ui_limiter, None, ui_use_ollama_options, False,
+            mock_settings, mock_models_data, mock_limiters_data,
+            None, mock_file_agents_dict, mock_history_list, mock_session_history
+        )
 
-    # Behavior is to run once as text-only if folder provided but model lacks vision
     assert response == "LLM Text Response (Folder Ignored)"
     assert model_state == "text-model"
-    assert "Image: [None - Folder Ignored]" in new_session_list[-1] # Check history log entry detail
-    assert len(new_session_list) == 2 # Only one entry added
-
-    # Removed assertion on isdir call count
-    mock_get_llm.assert_called_once() # Called only once
-    call_args, call_kwargs = mock_get_llm.call_args
-    assert call_kwargs['images'] is None # No images passed
-    assert "Image Context:" not in call_kwargs['prompt'] # No image context in prompt
+    assert "Image: [None - Folder Ignored]" in new_session_list[-1]
+    assert len(new_session_list) == 2
+    mock_stream.assert_called_once()
+    mock_get_llm.assert_not_called() # No per-image calls
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs['images'] is None
+    assert "Image Context:" not in kwargs['prompt']
 
 
 def test_chat_logic_error_model_not_found():
@@ -604,7 +760,6 @@ def test_chat_logic_error_folder_image_open(
     assert response # Some message is returned to the UI
 
 
-
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
 @patch(OS_PATH_ISDIR_PATH, return_value=True)
 @patch(OS_LISTDIR_PATH, return_value=["bad_image.png"])
@@ -622,7 +777,6 @@ def test_chat_logic_folder_all_images_fail_reports_errors(mock_pil_open, mock_is
             None, mock_file_agents_dict, mock_history_list, mock_session_history
         )
     assert "bad_image.png: Error - Cannot open this image" in response
-
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
@@ -658,63 +812,41 @@ def test_chat_logic_error_folder_list(mock_listdir, mock_isdir):
     assert model_state == "vision-model" # Model was identified before listdir error
 
 
-# --- Tests for comment_logic (core/refinement_logic.py) ---
-
-@patch('core.refinement_logic.time.strftime', return_value=MOCK_TIMESTAMP)
-@patch('core.refinement_logic.history.add_to_history', return_value=None)
-@patch('core.refinement_logic.get_llm_response')
-@patch('core.refinement_logic.load_all_roles')
-def test_comment_logic_success(mock_load_roles, mock_get_llm, mock_add_history, mock_strftime):
-    """Test successful comment/refinement call."""
-    mock_load_roles.return_value = mock_roles_data
-    mock_get_llm.return_value = "Refined LLM Response"
-    previous_response = "Original LLM Response"
-    comment_text = "Make it better."
-
-    response, session_hist_txt, new_session_list = refinement_logic.comment_logic(
-        previous_response, comment_text, ui_max_tokens, ui_use_ollama_options,
-        ui_model_vision, mock_settings, mock_file_agents_dict,
-        mock_history_list, mock_session_history
-    )
-
-    assert response == "Refined LLM Response"
-    assert len(new_session_list) == 2 # Original session + comment entry
-    assert "Action: Refine Text (Comment)" in new_session_list[-1]
-    assert "Model: vision-model" in new_session_list[-1]
-    assert session_hist_txt == "\n---\n".join(new_session_list)
-
-    mock_load_roles.assert_called_once_with(mock_settings, file_agents=mock_file_agents_dict)
-    mock_get_llm.assert_called_once()
-    call_kwargs = mock_get_llm.call_args.kwargs
-    assert call_kwargs['role'] == "Refinement Assistant" # Persona is embedded in the prompt
-    assert call_kwargs['model'] == "vision-model" # ' (VISION)' suffix stripped
-    assert call_kwargs['settings'] == mock_settings
-    assert call_kwargs['roles_data'] == mock_roles_data
-    assert call_kwargs['images'] is None
-    assert call_kwargs['max_tokens'] == ui_max_tokens
-    assert f"**Original Text:**\n---\n{previous_response}\n---" in call_kwargs['prompt']
-    assert f"**User's Refinement Instruction:**\n---\n{comment_text}\n---" in call_kwargs['prompt']
-    mock_add_history.assert_called_once() # History added for the comment
-    assert mock_session_history == ["session_entry_1"] # Input state not mutated
+@patch(ADD_TO_HISTORY_PATH, side_effect=lambda h, e: (h or []) + [e])
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_iter_chat_logic_folder_yields_progress_per_image(mock_load_roles, mock_add_history, tmp_path, mock_time):
+    """Folder mode reports progress before each image and writes real caption files."""
+    for name in ("a.png", "b.png"):
+        Image.new("RGB", (4, 4), "blue").save(tmp_path / name)
+    (tmp_path / "notes.txt").write_text("not an image", encoding="utf-8")
+    with patch(GET_LLM_RESPONSE_PATH, side_effect=["Caption A", "Caption B"]) as mock_get_llm:
+        last, items = final(app_logic.iter_chat_logic(
+            str(tmp_path), ui_role_agent1, "Describe", ui_model_vision, ui_max_tokens, "Overwrite", ui_limiter, None,
+            False, False, mock_settings, mock_models_data, mock_limiters_data, None,
+            mock_file_agents_dict, mock_history_list, mock_session_history))
+    responses = [i[0] for i in items]
+    assert responses[0].startswith("⏳ Processing image 1/2: a.png")
+    assert responses[1].startswith("⏳ Processing image 2/2: b.png")
+    assert "a.png: Written -> a.txt" in responses[1] # Earlier results stay visible
+    assert last[0].startswith("Folder processing complete (2 processed, 0 skipped):")
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "Caption A"
+    assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "Caption B"
+    assert "Image Context: Analyzing 'b.png'" in mock_get_llm.call_args.kwargs["prompt"]
+    assert mock_get_llm.call_args.kwargs["system"] == "You are acting as the agent 'Agent1'.\n\nDoes agent things."
+    assert last[4] is None # Folder runs don't start a refine conversation
 
 
-@patch('core.refinement_logic.get_llm_response')
-def test_comment_logic_no_comment_or_model(mock_get_llm):
-    """Test comment logic skips if comment or model is missing."""
-    # Scenario 1: No comment text
-    response1, session_hist_txt1, new_session_list1 = refinement_logic.comment_logic(
-        "Prev Resp", "", 100, False, "model", mock_settings, {}, [], []
-    )
-    assert response1 == "Prev Resp" # Unchanged
-    assert len(new_session_list1) == 0
-
-    # Scenario 2: No model selected
-    response2, session_hist_txt2, new_session_list2 = refinement_logic.comment_logic(
-        "Prev Resp", "A comment", 100, False, None, mock_settings, {}, [], []
-    )
-    assert response2 == "Prev Resp" # Unchanged
-    assert len(new_session_list2) == 0
-    mock_get_llm.assert_not_called()
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_iter_chat_logic_folder_with_error_response_skips_write(mock_load_roles, mock_add_history, tmp_path, mock_time):
+    Image.new("RGB", (4, 4)).save(tmp_path / "a.png")
+    with patch(GET_LLM_RESPONSE_PATH, return_value="⚠️ Error: model crashed"):
+        response, *_ = app_logic.chat_logic(
+            str(tmp_path), ui_role_agent1, "Describe", ui_model_vision, ui_max_tokens, "Overwrite", ui_limiter, None,
+            False, False, mock_settings, mock_models_data, mock_limiters_data, None,
+            mock_file_agents_dict, mock_history_list, mock_session_history)
+    assert "a.png: Skipped (Empty/Error Response)" in response
+    assert not (tmp_path / "a.txt").exists()
 
 
 # --- Tests for Team Editor Callbacks ---

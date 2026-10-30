@@ -1,6 +1,8 @@
 # ArtAgent/ui/app_settings_tab.py
 import gradio as gr
 from core.utils import load_json, AVAILABLE_THEMES # Import theme map
+from core.ollama_client import base_url_from_settings, VALID_OPTIONS
+from core.image_gen_settings import image_gen_settings
 # Import help content functions/data
 from core.help_content import get_tooltip, get_markdown
 
@@ -22,9 +24,18 @@ def create_app_settings_tab(initial_settings):
                 gr.Markdown("### General Application Settings")
                 with gr.Group():
                     settings_ollama_url = gr.Textbox(
-                        label="Ollama URL",
-                        value=initial_settings.get("ollama_url", "")
+                        label="Ollama Server URL",
+                        value=base_url_from_settings(initial_settings),
+                        placeholder="http://localhost:11434"
                     )
+                    settings_think_mode = gr.Radio(
+                        ["off", "auto", "on"], value=initial_settings.get("ollama_think", "off"),
+                        label="Reasoning ('thinking') models",
+                        info="off = answer directly (fastest, best for prompts); auto = model default; on = always reason first. Reasoning text is never put into the answer."
+                    )
+                    with gr.Row():
+                        settings_refresh_models_button = gr.Button("🔄 Test Connection & Refresh Model List")
+                    settings_models_status = gr.Markdown("")
                     settings_max_tokens_slider_range = gr.Slider(
                         label="Max Tokens Slider Range (Chat Tab)", minimum=512, maximum=16384, step=256,
                         value=initial_settings.get("max_tokens_slider", 4096)
@@ -63,6 +74,24 @@ def create_app_settings_tab(initial_settings):
                          value=initial_settings.get("gradio_theme", "Default")
                     )
 
+                gr.Markdown("### Image Generation Servers")
+                img_settings = image_gen_settings(initial_settings)
+                with gr.Group():
+                    settings_comfyui_url = gr.Textbox(label="ComfyUI URL", value=img_settings["comfyui_url"])
+                    settings_sdwebui_url = gr.Textbox(
+                        label="Forge / A1111 / SD.Next URL", value=img_settings["sdwebui_url"],
+                        info="Start the WebUI with --api. If it uses port 7860, ArtAgents moves to the next free port."
+                    )
+                    settings_ollama_images_url = gr.Textbox(label="Ollama (image models) URL", value=img_settings["ollama_images_url"])
+                    settings_image_output_dir = gr.Textbox(
+                        label="Image Output Folder", value=img_settings["output_dir"],
+                        info="Relative paths are inside the ArtAgents folder. Images are saved into a dated subfolder."
+                    )
+                    settings_save_prompt_txt = gr.Checkbox(
+                        label="Save the prompt as a .txt next to each generated image (dataset-ready)",
+                        value=img_settings["save_prompt_txt"]
+                    )
+
                 gr.Markdown("### Ollama Actions")
                 with gr.Group():
                     release_models_button = gr.Button(
@@ -86,7 +115,7 @@ def create_app_settings_tab(initial_settings):
                 initial_ollama_options = initial_settings.get("ollama_api_options", {})
                 with gr.Group():
                     # Sort for consistent order
-                    for key in sorted(initial_ollama_options.keys()):
+                    for key in sorted(k for k in initial_ollama_options.keys() if k in VALID_OPTIONS):
                         value = initial_ollama_options[key]
                         comp_args = {
                             "label": key,
@@ -121,6 +150,14 @@ def create_app_settings_tab(initial_settings):
     return {
         # General Settings
         "settings_ollama_url": settings_ollama_url,
+        "settings_think_mode": settings_think_mode,
+        "settings_refresh_models_button": settings_refresh_models_button,
+        "settings_models_status": settings_models_status,
+        "settings_comfyui_url": settings_comfyui_url,
+        "settings_sdwebui_url": settings_sdwebui_url,
+        "settings_ollama_images_url": settings_ollama_images_url,
+        "settings_image_output_dir": settings_image_output_dir,
+        "settings_save_prompt_txt": settings_save_prompt_txt,
         "settings_max_tokens_slider_range": settings_max_tokens_slider_range,
         "settings_api_to_console": settings_api_to_console,
         "settings_use_default": settings_use_default,

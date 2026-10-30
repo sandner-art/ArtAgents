@@ -1,9 +1,30 @@
 # ArtAgent/core/agent_manager.py
 import time
+from dataclasses import dataclass
+from typing import Iterator
+
 from .utils import load_json # Utility for loading team definitions if needed elsewhere
-# IMPORT get_llm_response from ollama_agent
-from agents.ollama_agent import get_llm_response
+from .image_utils import to_pil_image
+from agents.ollama_agent import get_llm_response, stream_llm_response
 from . import history_manager as history # To log steps to persistent history
+
+
+@dataclass
+class TeamProgress:
+    """Emitted while a team runs (for live UI updates)."""
+    step: int            # 1-based step number; 0 = assembling the final output
+    total_steps: int
+    role: str
+    partial_output: str  # The step's answer so far (streamed)
+    message: str = ""
+
+
+@dataclass
+class TeamResult:
+    """Last item emitted by iter_team_workflow."""
+    final_output: str
+    history_list: list
+    step_outputs: dict | None
 
 AGENT_TEAMS_FILE = 'agent_teams.json' # Relative path from root
 
@@ -15,7 +36,7 @@ def load_agent_teams(filepath=AGENT_TEAMS_FILE):
         return {}
     return teams_data
 
-def run_team_workflow(
+def iter_team_workflow(
     team_name: str,
     team_definition: dict,
     user_input: str,
@@ -25,10 +46,13 @@ def run_team_workflow(
     worker_model_name: str,
     # Pass single_image_input if workflows need to handle images
     single_image_input = None, # Add image input parameter (default to None)
-    return_intermediate_steps: bool = False # Argument to control return value
-    ) -> tuple[str, list, dict | None]: # Updated return signature
+    return_intermediate_steps: bool = False, # Argument to control return value
+    worker_model_has_vision: bool | None = None, # Whether the worker model accepts images
+    ) -> Iterator["TeamProgress | TeamResult"]:
     """
-    Executes a defined agent team workflow.
+    Executes a defined agent team workflow, yielding TeamProgress updates while
+    steps stream and exactly one TeamResult at the end.
+    (run_team_workflow below is the blocking wrapper with the old return value.)
 
     Args:
         team_name (str): The name of the team being executed.
@@ -56,20 +80,23 @@ def run_team_workflow(
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
         error_log = f"Timestamp: {timestamp}\nWorkflow Start Error: '{team_name}'\nError: {msg}\nUser Input: {user_input}\n---\n"
         history_list = history.add_to_history(history_list, error_log)
-        return msg, history_list, None
+        yield TeamResult(msg, history_list, None)
+        return
 
     steps = team_definition.get("steps", [])
     assembly_strategy = team_definition.get("assembly_strategy", "concatenate") # Default to simple concat
     step_outputs_dict = {} # Store intermediate results {step_index: {details}}
 
     current_context = f"User Request: {user_input}\nWorkflow Goal: {team_definition.get('description', 'Generate detailed output.')}\n"
-    if single_image_input: # Add note about image if present
+    # UI images arrive as numpy arrays; never test them with `if image:`
+    single_image_input = to_pil_image(single_image_input)
+    if single_image_input is not None: # Add note about image if present
          current_context += "Input includes a single image.\n"
     current_context += "---\n" # Separator after initial context
 
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     # Log start to persistent history
-    initial_log = f"Timestamp: {timestamp}\nWorkflow Start: '{team_name}'\nStrategy: {assembly_strategy}\nModel: {worker_model_name}\nUser Input: {user_input}\nImage Provided: {'Yes' if single_image_input else 'No'}\n---\n"
+    initial_log = f"Timestamp: {timestamp}\nWorkflow Start: '{team_name}'\nStrategy: {assembly_strategy}\nModel: {worker_model_name}\nUser Input: {user_input}\nImage Provided: {'Yes' if single_image_input is not None else 'No'}\n---\n"
     history_list = history.add_to_history(history_list, initial_log)
 
 
@@ -99,7 +126,9 @@ def run_team_workflow(
         role_info = all_roles_data.get(step_role, {}) # Look up role details
         role_desc = role_info.get("description", "Perform your function.")
         # Provide context, define role/goal for the agent
-        step_prompt = f"Context:\n{current_context}\n---\nYour Role: {step_role} - {role_desc}\nYour Goal for this step: {step_goal}\n\nBased *only* on the provided context and your goal, provide your specific output:"
+        # The agent persona goes into the system prompt; context and goal into the user turn
+        step_system = f"You are '{step_role}', one agent in a creative team workflow.\n{role_desc}"
+        step_prompt = f"Context:\n{current_context}\n---\nYour Goal for this step: {step_goal}\n\nBased *only* on the provided context and your goal, provide your specific output:"
 
         # --- Call the LLM using get_llm_response ---
         step_max_tokens = initial_settings.get("sweep_step_max_tokens", 750) # Example: Default max for intermediate steps
@@ -108,23 +137,30 @@ def run_team_workflow(
         # Basic logic: Pass image if it exists AND the worker model has vision.
         # More advanced: Could add a flag per step in team def: "needs_image": true
         images_for_step = None
-        model_has_vision = any(m.get('name') == worker_model_name and m.get('vision') for m in initial_settings.get('loaded_models_data', [])) # Check if model supports vision based on loaded data if available
-        if single_image_input and model_has_vision:
+        if worker_model_has_vision is not None:
+            model_has_vision = worker_model_has_vision
+        else:
+            model_has_vision = any(m.get('name') == worker_model_name and m.get('vision') for m in initial_settings.get('loaded_models_data', []))
+        if single_image_input is not None and model_has_vision:
             print(f"  Passing image to agent '{step_role}' (model '{worker_model_name}' supports vision).")
             images_for_step = [single_image_input]
-        elif single_image_input and not model_has_vision:
+        elif single_image_input is not None and not model_has_vision:
              print(f"  Not passing image to agent '{step_role}' (model '{worker_model_name}' does not support vision).")
 
 
-        step_output_text = get_llm_response(
+        step_output_text = ""
+        yield TeamProgress(step_idx, len(steps), step_role, "", f"Step {step_idx}/{len(steps)}: {step_role}")
+        for step_output_text in stream_llm_response(
             role=step_role, # Use the actual role name from step definition
             prompt=step_prompt,
+            system=step_system,
             model=worker_model_name,
             settings=initial_settings,
             roles_data=all_roles_data, # Pass full roles data for option merging
             images=images_for_step, # Pass image list if applicable for this step
             max_tokens=step_max_tokens,
-        )
+        ):
+            yield TeamProgress(step_idx, len(steps), step_role, step_output_text, f"Step {step_idx}/{len(steps)}: {step_role}")
 
         # Check if agent returned an error message (starts with warning emoji)
         if step_output_text.strip().startswith("⚠️ Error:"):
@@ -137,7 +173,8 @@ def run_team_workflow(
             error_log = f"Timestamp: {timestamp}\nWorkflow Step {step_idx} Error ('{step_role}')\nError Message: {error_msg}\nContext Provided (start):\n{current_context[:500]}...\n---\n"
             history_list = history.add_to_history(history_list, error_log)
             # Return error message, updated history, and collected step outputs so far
-            return f"Workflow stopped due to error in step {step_idx} ({step_role}): {error_msg}", history_list, (step_outputs_dict if return_intermediate_steps else None)
+            yield TeamResult(f"Workflow stopped due to error in step {step_idx} ({step_role}): {error_msg}", history_list, (step_outputs_dict if return_intermediate_steps else None))
+            return
         else:
             clean_output = step_output_text.strip()
             print(f"  Agent '{step_role}' Output Length: {len(clean_output)}")
@@ -152,6 +189,7 @@ def run_team_workflow(
             history_list = history.add_to_history(history_list, step_log)
 
     # --- Assemble Final Output ---
+    yield TeamProgress(0, len(steps), "", "", f"Assembling final output ({assembly_strategy})...")
     print("\n--- Assembling Final Workflow Output ---")
     final_output = ""
     # Use the step_outputs_dict which contains results (output or error) for assembly
@@ -356,4 +394,17 @@ def run_team_workflow(
     print(f"--- Workflow {team_name} Finished. Output Length: {len(final_output)} ---")
 
     # Return final output, updated history list, and intermediate steps if requested
-    return final_output, history_list, (step_outputs_dict if return_intermediate_steps else None)
+    yield TeamResult(final_output, history_list, (step_outputs_dict if return_intermediate_steps else None))
+
+
+def run_team_workflow(*args, **kwargs) -> tuple[str, list, dict | None]:
+    """
+    Blocking wrapper around iter_team_workflow (used by captioning and sweeps).
+
+    Returns:
+        (final_output, updated_history_list, step_outputs_dict_or_None)
+    """
+    for event in iter_team_workflow(*args, **kwargs):
+        if isinstance(event, TeamResult):
+            return event.final_output, event.history_list, event.step_outputs
+    return "Error: Workflow ended without a result.", kwargs.get("history_list", []), None

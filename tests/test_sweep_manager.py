@@ -4,6 +4,7 @@ import pytest
 import os
 import sys
 import json
+import itertools
 import time
 from unittest.mock import patch, MagicMock, call, ANY, mock_open
 
@@ -68,8 +69,9 @@ def mock_time(monkeypatch):
     monkeypatch.setattr(TIME_STRFTIME_PATH, mock_strftime)
     # gmtime returns a time.struct_time object
     monkeypatch.setattr(TIME_GMTIME_PATH, lambda: MOCK_PROTOCOL_TIMESTAMP_STRUCT)
-    # Mock time.time() just in case duration calculation is tested later
-    monkeypatch.setattr('core.sweep_manager.time.time', MagicMock(side_effect=[1000.0, 1010.0])) # Example start/end times
+    # time.time() is called for the start, every progress line and the summary: count up 1s per call
+    clock = itertools.count(1000.0)
+    monkeypatch.setattr('core.sweep_manager.time.time', lambda: next(clock))
 
 
 @pytest.fixture(autouse=True)
@@ -317,3 +319,53 @@ def test_run_sweep_protocol_save_error(
     assert "Run 1:" in summary
     assert "Protocol Save Error:" in summary
     assert "save_json utility returned False" in summary
+
+# --- iter_sweep (streaming version used by the UI) ---
+
+def _sweep_patches(workflow_return=("Output", [], None)):
+    return (patch(LOAD_ALL_ROLES_PATH, return_value=MOCK_ROLES_DATA),
+            patch(RUN_TEAM_WORKFLOW_PATH, return_value=workflow_return),
+            patch(SAVE_JSON_PATH, return_value=True),
+            patch(OS_MAKEDIRS_PATH),
+            patch(GET_ABS_PATH, return_value=EXPECTED_ABS_OUTPUT_DIR))
+
+
+def test_iter_sweep_yields_status_after_each_run(mock_prompt_file_open, mock_time):
+    p1, p2, p3, p4, p5 = _sweep_patches()
+    with p1, p2, p3, p4, p5:
+        updates = list(sweep_manager.iter_sweep(MOCK_PROMPTS_TEXT, SELECTED_TEAMS, SELECTED_MODELS, OUTPUT_FOLDER_NAME, False, MOCK_SETTINGS, MOCK_TEAMS_DATA))
+    assert len(updates) == 9 # 8 runs + final summary
+    assert updates[0].startswith("⏳ Sweep running: 1/8 runs done")
+    assert f"Output folder: {EXPECTED_ABS_OUTPUT_DIR}" in updates[0]
+    assert "Run 1:" in updates[0]
+    assert updates[7].startswith("⏳ Sweep running: 8/8 runs done")
+    assert updates[-1].startswith("--- Sweep Complete ---")
+
+
+def test_iter_sweep_validation_yields_single_error(mock_time):
+    assert list(sweep_manager.iter_sweep("", SELECTED_TEAMS, SELECTED_MODELS, "x", False, MOCK_SETTINGS, MOCK_TEAMS_DATA)) == ["Error: No base prompts provided."]
+    assert list(sweep_manager.iter_sweep("p", [], SELECTED_MODELS, "x", False, MOCK_SETTINGS, MOCK_TEAMS_DATA)) == ["Error: No Agent Teams selected."]
+    assert list(sweep_manager.iter_sweep("p", SELECTED_TEAMS, [], "x", False, MOCK_SETTINGS, MOCK_TEAMS_DATA)) == ["Error: No Worker Models selected."]
+    assert list(sweep_manager.iter_sweep(" \n ", SELECTED_TEAMS, SELECTED_MODELS, "x", False, MOCK_SETTINGS, MOCK_TEAMS_DATA)) == ["Error: No base prompts provided."]
+
+
+def test_iter_sweep_stop_closes_prompt_files(mock_prompt_file_open, mock_time):
+    """Stopping the sweep (closing the generator) closes the open prompts_<model>.txt files and runs nothing more."""
+    p1, p2, p3, p4, p5 = _sweep_patches()
+    with p1, p2 as mock_run, p3, p4, p5:
+        gen = sweep_manager.iter_sweep(MOCK_PROMPTS_TEXT, SELECTED_TEAMS, SELECTED_MODELS, OUTPUT_FOLDER_NAME, False, MOCK_SETTINGS, MOCK_TEAMS_DATA)
+        first = next(gen)
+        handle = mock_prompt_file_open()
+        handle.closed = False
+        handle.close.assert_not_called()
+        gen.close()
+    assert first.startswith("⏳ Sweep running: 1/8")
+    handle.close.assert_called()
+    assert mock_run.call_count == 1
+
+
+def test_run_sweep_returns_final_summary_only(mock_prompt_file_open, mock_time):
+    p1, p2, p3, p4, p5 = _sweep_patches()
+    with p1, p2, p3, p4, p5:
+        summary = sweep_manager.run_sweep("One", ["TeamSweepA"], ["model-sweep-1"], OUTPUT_FOLDER_NAME, False, MOCK_SETTINGS, MOCK_TEAMS_DATA)
+    assert summary.startswith("--- Sweep Complete ---") and "Total Runs Attempted: 1/1" in summary

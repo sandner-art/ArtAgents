@@ -11,10 +11,10 @@ import time
 
 # Import necessary functions/classes from sibling modules or agents
 from .utils import load_json, get_absolute_path, clean_agent_artifacts # Import cleaner
-from .image_utils import open_image, is_image_filename
+from .image_utils import open_image, is_image_filename, to_pil_image
 from . import history_manager as history
 from agents.roles_config import load_all_roles, get_role_display_name, get_actual_role_name
-from agents.ollama_agent import get_llm_response
+from agents.ollama_agent import get_llm_response, stream_llm_response, is_error_response
 # Import ollama_manager to call release_model and agent_manager for workflows
 from . import ollama_manager
 from . import agent_manager # Import the agent manager
@@ -42,378 +42,369 @@ def save_teams_to_file(teams_data):
         return False
 
 # --- Workflow Execution Router ---
-def execute_chat_or_team(
+DIRECT_CALL_LABEL = "(Direct Agent Call)"
+TEAM_PREFIX = "[Team] "
+REFINER_SYSTEM_PROMPT = (
+    "You are an AI assistant specialized in refining and modifying existing text based on user instructions. "
+    "Keep the core essence of the text unless asked otherwise, and output only the revised text."
+)
+
+
+def resolve_model(models_data_state, model_with_vision):
+    """Finds the model entry for a dropdown value ('name' or 'name (VISION)'). Returns (name, info) or (None, None)."""
+    if not models_data_state or not model_with_vision:
+        return None, None
+    for m in models_data_state:
+        m_name = m.get("name") if isinstance(m, dict) else None
+        if m_name and (m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision):
+            return m_name, m
+    return None, None
+
+
+def build_agent_system_prompt(role_name, role_description, limiter_prompt_format=""):
+    """System prompt for a single agent: its persona plus any prompt-style limiter."""
+    parts = []
+    if role_name:
+        parts.append(f"You are acting as the agent '{role_name}'.")
+        if role_description:
+            parts.append(role_description)
+    if limiter_prompt_format:
+        parts.append(limiter_prompt_format)
+    return "\n\n".join(parts) if parts else None
+
+
+def _join_session(session_list):
+    return "\n---\n".join(session_list)
+
+
+def iter_execute_chat_or_team(
     # UI Inputs (Common)
     folder_path, user_input, model_with_vision, max_tokens_ui,
-    file_handling_option, limiter_handling_option, single_image_input, # Renamed from single_image_np
+    file_handling_option, limiter_handling_option, single_image_input,
     use_ollama_api_options, release_model_on_change,
     # UI Inputs (Specific)
-    selected_role_or_team, # This dropdown now selects EITHER a role OR a team
-    clean_artifacts_flag: bool, # Flag from UI checkbox
+    selected_role_or_team, # A role, a "[Team] name", or "(Direct Agent Call)"
+    clean_artifacts_flag: bool,
     # State Inputs
     current_settings,
     models_data_state,
     limiters_data_state,
-    teams_data_state, # Loaded agent teams
+    teams_data_state,
     selected_model_tracker_value,
     file_agents_dict,
-    history_list_state, # Persistent history list
-    session_history_list_state # Current session history list
-    ) -> tuple[str, str, str | None, list]: # Added type hints for return
+    history_list_state,
+    session_history_list_state,
+    ):
     """
-    Determines whether to run a single agent or an agent team workflow.
-    Applies artifact cleaning if requested using a utility function.
+    Streaming router: runs a team workflow or a single agent / direct model call.
+
+    Yields (response_text, session_history_text, model_name_state, session_history_list, conversation)
+    repeatedly while the answer streams in; the last item is final. `conversation` is the
+    chat state used by Comment/Refine (None while streaming).
+    """
+    print(f"\nExecuting chat/team with selection: '{selected_role_or_team}'")
+    print(f"  Clean Artifacts Flag: {clean_artifacts_flag}")
+    session_list = list(session_history_list_state or [])
+    last = ("Error: Processing failed.", _join_session(session_list), None, session_list, None)
+
+    if selected_role_or_team and selected_role_or_team.startswith(TEAM_PREFIX):
+        team_name = selected_role_or_team[len(TEAM_PREFIX):]
+        if not teams_data_state or team_name not in teams_data_state:
+            print(f"Warning: Selected team '{team_name}' not found in loaded teams data.")
+            yield f"Error: Selected Agent Team '{team_name}' definition not found.", _join_session(session_list), None, session_list, None
+            return
+        stream = _iter_team(team_name, teams_data_state[team_name], user_input, model_with_vision, single_image_input,
+                            current_settings, models_data_state, file_agents_dict, history_list_state, session_list)
+    else:
+        if not selected_role_or_team or selected_role_or_team == DIRECT_CALL_LABEL:
+            print("Running Direct Model Call (no agent persona).")
+        else:
+            print(f"Running Single Agent: '{selected_role_or_team}'")
+        stream = iter_chat_logic(
+            folder_path=folder_path, role_display_name=selected_role_or_team, user_input=user_input,
+            model_with_vision=model_with_vision, max_tokens_ui=max_tokens_ui,
+            file_handling_option=file_handling_option, limiter_handling_option=limiter_handling_option,
+            single_image_input=single_image_input, current_settings=current_settings,
+            use_ollama_api_options=use_ollama_api_options, release_model_on_change=release_model_on_change,
+            models_data_state=models_data_state, limiters_data_state=limiters_data_state,
+            selected_model_tracker_value=selected_model_tracker_value, file_agents_dict=file_agents_dict,
+            history_list_state=history_list_state, session_history_list_state=session_list,
+        )
+
+    for last in stream:
+        yield last
+
+    # --- Artifact cleaning on the final answer ---
+    response_text, session_text, model_state, final_session_list, conversation = last
+    if clean_artifacts_flag and isinstance(response_text, str) and not response_text.startswith("Error:") and not response_text.startswith("⚠️ Error:"):
+        cleaned_text = clean_agent_artifacts(response_text)
+        if cleaned_text != response_text:
+            print("  Applied artifact cleaning to final response.")
+            if conversation and conversation.get("messages"):
+                conversation["messages"][-1]["content"] = cleaned_text
+            yield cleaned_text, session_text, model_state, final_session_list, conversation
+
+
+def _iter_team(team_name, team_definition, user_input, model_with_vision, single_image_input,
+               current_settings, models_data_state, file_agents_dict, history_list_state, session_list):
+    """Runs a team workflow, streaming step output into the response box."""
+    session_list = list(session_list)
+    print(f"Running Agent Team Workflow: '{team_name}'")
+    if not models_data_state:
+        yield "Error: Models data state is missing.", _join_session(session_list), None, session_list, None
+        return
+    worker_model_name, model_info = resolve_model(models_data_state, model_with_vision)
+    if not worker_model_name:
+        yield f"Error: Could not determine worker model name for team from input '{model_with_vision}'.", _join_session(session_list), None, session_list, None
+        return
+    try:
+        image = to_pil_image(single_image_input)
+    except Exception as e:
+        yield f"Error processing input image: {e}", _join_session(session_list), None, session_list, None
+        return
+
+    all_roles_data = load_all_roles(current_settings, file_agents=file_agents_dict)
+    final_output = "Error: Workflow ended without a result."
+    for event in agent_manager.iter_team_workflow(
+        team_name=team_name,
+        team_definition=team_definition,
+        user_input=user_input,
+        initial_settings=current_settings,
+        all_roles_data=all_roles_data,
+        history_list=list(history_list_state or []),
+        worker_model_name=worker_model_name,
+        single_image_input=image,
+        worker_model_has_vision=bool(model_info.get("vision")),
+    ):
+        if isinstance(event, agent_manager.TeamProgress):
+            header = f"⏳ Team '{team_name}' · {event.message}"
+            body = f"\n\n{event.partial_output}" if event.partial_output else ""
+            yield header + body, _join_session(session_list), None, session_list, None
+        elif isinstance(event, agent_manager.TeamResult):
+            final_output = event.final_output
+
+    summary_entry = (f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\nWorkflow Run: '{team_name}' (Model: {worker_model_name})\n"
+                     f"Final Output Length: {len(final_output)}\n---\n(Full steps in Persistent History)")
+    session_list.append(summary_entry)
+    conversation = {
+        "model": worker_model_name, "role": "Refinement Assistant", "system": REFINER_SYSTEM_PROMPT,
+        "messages": [
+            {"role": "user", "content": f"Create the final output for this request: {user_input}"},
+            {"role": "assistant", "content": final_output},
+        ],
+    }
+    yield final_output, _join_session(session_list), None, session_list, conversation
+
+
+def execute_chat_or_team(*args, **kwargs) -> tuple[str, str, str | None, list]:
+    """
+    Blocking router (used by captioning): same inputs as iter_execute_chat_or_team.
 
     Returns:
         tuple: (response_text, session_history_text, model_name_used_state, new_session_history_list)
     """
-    print(f"\nExecuting chat/team with selection: '{selected_role_or_team}'")
-    print(f"  Clean Artifacts Flag: {clean_artifacts_flag}") # Log the flag value
-    # Define return structure defaults
-    response_text = "Error: Processing failed."
-    session_history_text = "\n---\n".join(session_history_list_state)
-    model_name_state_update = None # Will be None for team workflows
-    # Create a working copy for the session history list
-    new_session_history_list = list(session_history_list_state)
-
-    # --- Check if it's a Team Workflow ---
-    is_team_workflow = False
-    team_name = None
-    team_prefix = "[Team] "
-    if selected_role_or_team and selected_role_or_team.startswith(team_prefix):
-        team_name = selected_role_or_team[len(team_prefix):]
-        if teams_data_state and team_name in teams_data_state:
-            is_team_workflow = True
-        else:
-            print(f"Warning: Selected team '{team_name}' not found in loaded teams data.")
-            response_text = f"Error: Selected Agent Team '{team_name}' definition not found."
-            # Return immediately matching the 4-tuple signature
-            return response_text, session_history_text, model_name_state_update, new_session_history_list
-
-    # --- Execute Workflow or Single Agent ---
-    if is_team_workflow:
-        team_definition = teams_data_state[team_name]
-        print(f"Running Agent Team Workflow: '{team_name}'")
-
-        # Reload all roles data to pass to the manager (includes file agents)
-        all_roles_data = load_all_roles(current_settings, file_agents=file_agents_dict)
-
-        # Determine the worker model
-        worker_model_name = None
-        if not models_data_state:
-             response_text = "Error: Models data state is missing."
-             return response_text, session_history_text, None, new_session_history_list
-        for m in models_data_state:
-            m_name = m.get("name")
-            if not m_name: continue
-            if m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision:
-                worker_model_name = m_name
-                break
-        if not worker_model_name:
-             response_text = f"Error: Could not determine worker model name for team from input '{model_with_vision}'."
-             return response_text, session_history_text, None, new_session_history_list
-
-        # Call the Agent Manager's workflow execution function
-        final_output, updated_persistent_history_list, _ = agent_manager.run_team_workflow(
-            team_name=team_name,
-            team_definition=team_definition,
-            user_input=user_input,
-            initial_settings=current_settings,
-            all_roles_data=all_roles_data,
-            history_list=list(history_list_state), # Pass copy of persistent history
-            worker_model_name=worker_model_name,
-            single_image_input=single_image_input, # Pass image if workflow handles it
-        )
-        # Persistent history state update is implicit via history.add_to_history inside manager
-
-        # Update session history list with a summary of the workflow run
-        summary_entry = f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\nWorkflow Run: '{team_name}' (Model: {worker_model_name})\nFinal Output Length: {len(final_output)}\n---\n(Full steps in Persistent History)"
-        new_session_history_list.append(summary_entry)
-
-        # Update return values
-        response_text = final_output
-        session_history_text = "\n---\n".join(new_session_history_list)
-        model_name_state_update = None # No single model state for teams
-
-    elif selected_role_or_team == "(Direct Agent Call)" or not selected_role_or_team:
-        print("Info: Direct Agent Call selected, or no agent/team chosen.")
-        response_text = "Please select a specific Agent or an Agent Team from the dropdown."
-        # Use current session list for text display
-        session_history_text = "\n---\n".join(new_session_history_list)
-
-    else:
-        # --- Assume it's a Single Agent Call ---
-        print(f"Running Single Agent: '{selected_role_or_team}'")
-        # Call the chat_logic function defined below
-        response_text, session_history_text, model_name_state_update, new_session_history_list = chat_logic(
-            # Pass all necessary arguments (including selected_role_or_team as role_display_name)
-            folder_path=folder_path,
-            role_display_name=selected_role_or_team, # The selected item is the role display name
-            user_input=user_input,
-            model_with_vision=model_with_vision, # Model name from UI/Caller
-            max_tokens_ui=max_tokens_ui,
-            file_handling_option=file_handling_option,
-            limiter_handling_option=limiter_handling_option,
-            single_image_input=single_image_input, # Pass the input image (PIL or Numpy)
-            current_settings=current_settings, # Pass settings from state
-            use_ollama_api_options=use_ollama_api_options,
-            release_model_on_change=release_model_on_change,
-            models_data_state=models_data_state,
-            limiters_data_state=limiters_data_state,
-            selected_model_tracker_value=selected_model_tracker_value,
-            file_agents_dict=file_agents_dict,
-            history_list_state=history_list_state,
-            session_history_list_state=session_history_list_state # Pass current session list
-        )
-
-    # --- APPLY ARTIFACT CLEANING using utility function ---
-    if clean_artifacts_flag and isinstance(response_text, str) and not response_text.startswith("Error:") and not response_text.startswith("⚠️ Error:"):
-        original_text = response_text # Keep original for comparison
-        # Call the utility function
-        cleaned_text = clean_agent_artifacts(response_text)
-        # Check if cleaning changed the text
-        if original_text != cleaned_text:
-             print("  Applied artifact cleaning to final response.")
-             response_text = cleaned_text # Use the cleaned text
-        # else: print("  Artifact cleaning applied, but no changes detected.")
+    last = None
+    for last in iter_execute_chat_or_team(*args, **kwargs):
+        pass
+    return tuple(last[:4]) if last else ("Error: Processing failed.", "", None, [])
 
 
-    # --- Return final values ---
-    # Note: History logging happens within the called functions (chat_logic/run_team_workflow)
-    # and currently logs the raw output before cleaning.
-    return response_text, session_history_text, model_name_state_update, new_session_history_list
-
-
-# --- Single Agent Chat Logic ---
-def chat_logic(
+# --- Single Agent / Direct Model Logic ---
+def iter_chat_logic(
     # UI Inputs
     folder_path, role_display_name, user_input, model_with_vision, max_tokens_ui,
-    file_handling_option, limiter_handling_option, single_image_input, # Renamed for clarity
+    file_handling_option, limiter_handling_option, single_image_input,
     use_ollama_api_options, release_model_on_change,
     # State Inputs
     current_settings, models_data_state, limiters_data_state,
     selected_model_tracker_value, file_agents_dict,
     history_list_state, session_history_list_state
-    ) -> tuple[str, str, str | None, list]: # Added return type hint
-    """Handles the core chat logic for a SINGLE agent, calling the Ollama agent."""
-    # Use copies of mutable state lists
-    history_list = list(history_list_state)
-    current_session_history = list(session_history_list_state) # This is the list we modify
+    ):
+    """
+    Single agent (or direct model) call, streaming.
 
-    # Get Actual Role Name from display name
-    actual_role_name = get_actual_role_name(role_display_name)
-    print(f"Single Agent Logic: Role='{actual_role_name}'")
+    Yields (response, session_history_text, model_name, session_history_list, conversation).
+    Folder mode yields a progress line per image instead of tokens.
+    """
+    history_list = list(history_list_state or [])
+    current_session_history = list(session_history_list_state or [])
 
-    # Use settings PASSED IN to load roles relevant to this call
+    def snapshot(response, model=None, conversation=None):
+        return response, _join_session(current_session_history), model, list(current_session_history), conversation
+
+    direct_call = not role_display_name or role_display_name == DIRECT_CALL_LABEL
+    actual_role_name = None if direct_call else get_actual_role_name(role_display_name)
+    print(f"Single Agent Logic: Role='{actual_role_name or '(direct)'}'")
     roles_data_current = load_all_roles(current_settings, file_agents=file_agents_dict)
 
     # 1. Find Model Name and Info
-    model_name = None; model_info = None
-    if not models_data_state: return "Error: Models data not loaded.", "\n---\n".join(current_session_history), None, current_session_history
-    if not model_with_vision: return "Error: No model specified for agent execution.", "\n---\n".join(current_session_history), None, current_session_history
-    for m in models_data_state:
-         m_name = m.get("name");
-         if not m_name: continue
-         # Match base name or display name (e.g., "llava:latest" or "llava:latest (VISION)")
-         if m_name == model_with_vision or f"{m_name} (VISION)" == model_with_vision:
-             model_name = m_name
-             model_info = m
-             break
-    if not model_name or not model_info: return f"Error: Selected model info not found for '{model_with_vision}'.", "\n---\n".join(current_session_history), None, current_session_history
+    if not models_data_state:
+        yield snapshot("Error: Models data not loaded."); return
+    if not model_with_vision:
+        yield snapshot("Error: No model specified for agent execution."); return
+    model_name, model_info = resolve_model(models_data_state, model_with_vision)
+    if not model_name:
+        yield snapshot(f"Error: Selected model info not found for '{model_with_vision}'."); return
     print(f"  Using model: {model_name}")
-
 
     # 2. Handle Model Release
     if release_model_on_change and selected_model_tracker_value and selected_model_tracker_value != model_name:
-        print(f"Requesting release of previous model: {selected_model_tracker_value}")
-        ollama_manager.release_model(selected_model_tracker_value, current_settings.get("ollama_url"))
+        previous = selected_model_tracker_value.replace(" (VISION)", "")
+        if previous != model_name:
+            print(f"Requesting release of previous model: {previous}")
+            ollama_manager.release_model(previous, current_settings)
 
-    # 3. Prepare Prompt and Options
-    limiter_settings = limiters_data_state.get(limiter_handling_option, {})
+    # 3. Prepare prompts and options
+    limiter_settings = (limiters_data_state or {}).get(limiter_handling_option, {})
     limiter_prompt_format = limiter_settings.get("limiter_prompt_format", "")
     limiter_token_slider = limiter_settings.get("limiter_token_slider")
     effective_max_tokens = min(max_tokens_ui, limiter_token_slider) if limiter_handling_option != "Off" and limiter_token_slider is not None else max_tokens_ui
-    role_description = roles_data_current.get(actual_role_name, {}).get("description", "Unknown Role")
-    # Construct prompt - ensure limiter format comes before user input if applicable
-    prompt_parts = [f"Role: {actual_role_name} - {role_description}"]
-    if limiter_prompt_format: prompt_parts.append(limiter_prompt_format)
-    prompt_parts.append(f"User Input: {user_input}")
-    prompt = "\n".join(prompt_parts) + "\n" # Add final newline
+    role_description = roles_data_current.get(actual_role_name, {}).get("description", "Unknown Role") if actual_role_name else ""
+    system_prompt = build_agent_system_prompt(actual_role_name, role_description, limiter_prompt_format)
+    llm_kwargs = dict(
+        role=actual_role_name or "", model=model_name, settings=current_settings, roles_data=roles_data_current,
+        max_tokens=effective_max_tokens, system=system_prompt, use_global_options=use_ollama_api_options,
+    )
 
-    agent_ollama_options = {} # Agent function will handle merging based on settings/role/etc
-
-    # --- 4. Handle Image Input (REVISED LOGIC) ---
-    pil_images_list = []
-    is_single_image_mode = False
-    image_source_info = "[None - Text Only]"
-
-    # Check if input is not None and if the selected model supports vision
-    if single_image_input is not None and model_info.get("vision"):
-        # Check if input is already a PIL Image (coming from captioning logic)
-        if isinstance(single_image_input, Image.Image):
-            print("  Processing PIL Image input.")
-            pil_images_list = [single_image_input]
-            is_single_image_mode = True
-            image_source_info = "[Single PIL Image]"
-        # Check if input is a numpy array (coming from Gradio Image component)
-        elif isinstance(single_image_input, np.ndarray):
-            print("  Processing Numpy Image input.")
-            try:
-                pil_image = Image.fromarray(single_image_input.astype('uint8'))
-                pil_images_list = [pil_image]
-                is_single_image_mode = True
-                image_source_info = "[Single Upload/Numpy]"
-            except Exception as e:
-                return f"Error processing single numpy image: {e}", "\n---\n".join(current_session_history), model_name, current_session_history
-        else:
-            print(f"Warning: Received single image input of unexpected type: {type(single_image_input)}. Ignoring.")
-
-    elif single_image_input is not None and not model_info.get("vision"):
-        print("Warning: Single image provided, but selected model lacks vision.")
-        image_source_info = "[Single Image Ignored - No Vision]"
-    # --- End Revised Image Handling ---
-
-    # --- Add Debug Print for final arguments to ollama_agent ---
-    # print(f"DEBUG CHAT_LOGIC: Calling get_llm_response with:")
-    # print(f"  Role: {actual_role_name}")
-    # print(f"  Model: {model_name}")
-    # print(f"  Prompt Start: {prompt[:150]}...")
-    # print(f"  Images Type: {type(pil_images_list)}, Count: {len(pil_images_list)}")
-    # if pil_images_list: print(f"  First Image Type in list: {type(pil_images_list[0])}")
-    # print(f"  Max Tokens: {effective_max_tokens}")
-    # --- End Debug Print ---
-
-    # 5. Determine Mode and Call Agent
-    final_response = "Processing..."
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    entry_prefix = f"Timestamp: {timestamp}\nRole: {actual_role_name}\nModel: {model_name}\nInput: {user_input}"
+    entry_prefix = f"Timestamp: {timestamp}\nRole: {actual_role_name or '(Direct Model Call)'}\nModel: {model_name}\nInput: {user_input}"
 
-    if is_single_image_mode:
-         # Single Image Call
-         print(f"Calling agent (Single Image): model={model_name}, role={actual_role_name}, image_source={image_source_info}")
-         final_response = get_llm_response(
-             role=actual_role_name, prompt=prompt, model=model_name, settings=current_settings,
-             roles_data=roles_data_current, images=pil_images_list, max_tokens=effective_max_tokens,
-             ollama_api_options=agent_ollama_options
-         )
-         log_image_source_info = "[Image Data Sent]" if pil_images_list else image_source_info
-         entry = f"{entry_prefix}\nImage: {log_image_source_info}\nResponse:\n{final_response}\n---\n"
-         history_list = history.add_to_history(history_list, entry) # Updates persistent
-         current_session_history.append(entry) # Updates session list copy
+    def conversation_for(answer):
+        return {"model": model_name, "role": actual_role_name, "system": system_prompt,
+                "messages": [{"role": "user", "content": user_input or ""}, {"role": "assistant", "content": answer}]}
 
-    elif folder_path and os.path.isdir(folder_path):
-        # Folder Processing Call
-        if not model_info.get("vision"):
-             print("Warning: Folder path provided, but model lacks vision. Processing text-only.")
-             final_response = get_llm_response(
-                 role=actual_role_name, prompt=prompt, model=model_name, settings=current_settings,
-                 roles_data=roles_data_current, images=None, max_tokens=effective_max_tokens,
-                 ollama_api_options=agent_ollama_options
-            )
-             entry = f"{entry_prefix}\nImage: [None - Folder Ignored]\nResponse:\n{final_response}\n---\n"
-             history_list = history.add_to_history(history_list, entry)
-             current_session_history.append(entry)
-        else:
-             # Process folder with vision model (image by image)
-             print(f"Processing image folder: {folder_path}")
-             confirmation_messages = []; processed_files = 0; skipped_files = 0; base_prompt = prompt
-             try:
-                 files_in_folder = sorted([
-                     f for f in os.listdir(folder_path)
-                     if os.path.isfile(os.path.join(folder_path, f)) and is_image_filename(f)
-                 ])
-             except Exception as list_e: return f"Error listing folder: {list_e}", "\n---\n".join(current_session_history), model_name, current_session_history
+    # 4. Image input (numpy from the UI or PIL from captioning)
+    try:
+        pil_image = to_pil_image(single_image_input)
+    except Exception as e:
+        yield snapshot(f"Error processing single numpy image: {e}", model_name); return
+    image_source_info = "[None - Text Only]"
+    if pil_image is not None and not model_info.get("vision"):
+        print("Warning: Single image provided, but selected model lacks vision. Sending text only.")
+        image_source_info = "[Single Image Ignored - No Vision]"
+        pil_image = None
 
-             for file_name in files_in_folder:
-                 file_path = os.path.join(folder_path, file_name)
-                 loop_img = None # Initialize loop_img
-                 try:
-                      if file_handling_option == "Skip" and os.path.exists(os.path.join(folder_path, f"{os.path.splitext(file_name)[0]}.txt")):
-                          # Don't spend a model call on an image whose caption would be discarded anyway
-                          confirmation_messages.append(f"  - {file_name}: Skipped (caption file exists)")
-                          skipped_files += 1
-                          continue
-                      print(f"  Processing file: {file_name}")
-                      loop_img = open_image(file_path) # Restricted to PNG/JPEG/BMP/GIF/WEBP decoders
-                      image_prompt = f"{base_prompt}\nImage Context: Analyzing '{file_name}'\n"
-                      img_response = get_llm_response(
-                           role=actual_role_name, prompt=image_prompt, model=model_name, settings=current_settings,
-                           roles_data=roles_data_current, images=[loop_img], max_tokens=effective_max_tokens,
-                           ollama_api_options=agent_ollama_options
-                      )
+    # 5a. Single image call (streamed)
+    if pil_image is not None:
+        print(f"Calling agent (Single Image): model={model_name}, role={actual_role_name}")
+        final_response = ""
+        for final_response in stream_llm_response(prompt=user_input or "", images=[pil_image], **llm_kwargs):
+            yield snapshot(final_response, model_name)
+        entry = f"{entry_prefix}\nImage: [Image Data Sent]\nResponse:\n{final_response}\n---\n"
+        history_list = history.add_to_history(history_list, entry)
+        current_session_history.append(entry)
+        yield snapshot(final_response, model_name, None if is_error_response(final_response) else conversation_for(final_response))
+        return
 
-                      # --- File Handling Logic ---
-                      base_name = os.path.splitext(file_name)[0]
-                      output_file = os.path.join(folder_path, f"{base_name}.txt")
-                      action_taken = "Skipped"
-                      file_exists = os.path.exists(output_file)
-                      original_content = ""
+    # 5b. Folder processing (one call per image, progress per file)
+    if folder_path and os.path.isdir(folder_path) and model_info.get("vision"):
+        yield from _iter_folder(folder_path, user_input, file_handling_option, llm_kwargs, entry_prefix, timestamp,
+                                actual_role_name, model_name, history_list, current_session_history, snapshot)
+        return
+    if folder_path and os.path.isdir(folder_path):
+        print("Warning: Folder path provided, but model lacks vision. Processing text-only.")
+        image_source_info = "[None - Folder Ignored]"
 
-                      if file_exists and file_handling_option != "Overwrite" and file_handling_option != "Skip":
-                          try:
-                              with open(output_file, 'r', encoding='utf-8') as f:
-                                  original_content = f.read().strip()
-                          except Exception as read_e:
-                              print(f"  Warning: Could not read existing file {output_file}: {read_e}")
-
-                      # Decide action based on mode and existence
-                      if file_handling_option == "Overwrite" or not file_exists:
-                          if img_response and not img_response.startswith("⚠️ Error:"):
-                              with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response)
-                              action_taken = "Written" if not file_exists else "Overwritten"
-                          else: action_taken = "Skipped (Empty/Error Response)"
-                      elif file_handling_option == "Append":
-                          if img_response and not img_response.startswith("⚠️ Error:"):
-                              separator = "\n\n---\n\n" if original_content else ""
-                              with open(output_file, 'w', encoding='utf-8') as f: f.write(original_content + separator + img_response)
-                              action_taken = "Appended"
-                          else: action_taken = "Skipped (Empty/Error Response)"
-                      elif file_handling_option == "Prepend":
-                          if img_response and not img_response.startswith("⚠️ Error:"):
-                              separator = "\n\n---\n\n" if original_content else ""
-                              with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response + separator + original_content)
-                              action_taken = "Prepended"
-                          else: action_taken = "Skipped (Empty/Error Response)"
-                      # Skip case is handled by default action_taken="Skipped"
-
-                      # --- End File Handling ---
-
-                      confirmation_messages.append(f"  - {file_name}: {action_taken} -> {base_name}.txt")
-                      # History Update per Image
-                      entry = f"{entry_prefix}\nImage: {file_name} [Data Sent]\nResponse:\n{img_response}\n---\n" # Placeholder for image data
-                      history_list = history.add_to_history(history_list, entry); current_session_history.append(entry); processed_files += 1
-
-                 except Exception as e:
-                      error_msg = f"Error processing file '{file_name}': {e}"
-                      print(f"  {error_msg}")
-                      confirmation_messages.append(f"  - {file_name}: Error - {e}")
-                      error_entry = f"Timestamp: {timestamp}\nRole: {actual_role_name}\nModel: {model_name}\nInput: {user_input}\nImage: {file_name}\nERROR: {e}\n---\n"
-                      history_list = history.add_to_history(history_list, error_entry); current_session_history.append(error_entry)
-                 finally:
-                      if loop_img:
-                          try: loop_img.close()
-                          except Exception as e_close: print(f"  Warning: Error closing loop image {file_name}: {e_close}")
-
-             if not files_in_folder: final_response = "No supported image files found in the directory."
-             elif processed_files == 0 and skipped_files == 0: final_response = "No images could be processed:\n" + "\n".join(confirmation_messages)
-             else: final_response = f"Folder processing complete ({processed_files} processed, {skipped_files} skipped):\n" + "\n".join(confirmation_messages)
-
-    elif single_image_input is None and (not folder_path or not os.path.isdir(folder_path)):
-        # Text-Only Call (No image passed)
-         print(f"Calling agent (Text Only): model={model_name}, role={actual_role_name}")
-         final_response = get_llm_response(
-             role=actual_role_name, prompt=prompt, model=model_name, settings=current_settings,
-             roles_data=roles_data_current, images=None, max_tokens=effective_max_tokens, # Pass images=None
-             ollama_api_options=agent_ollama_options
-         )
-         entry = f"{entry_prefix}\nImage: {image_source_info}\nResponse:\n{final_response}\n---\n"
-         history_list = history.add_to_history(history_list, entry)
-         current_session_history.append(entry)
+    # 5c. Text-only call (streamed)
+    print(f"Calling agent (Text Only): model={model_name}, role={actual_role_name}")
+    final_response = ""
+    for final_response in stream_llm_response(prompt=user_input or "", images=None, **llm_kwargs):
+        yield snapshot(final_response, model_name)
+    entry = f"{entry_prefix}\nImage: {image_source_info}\nResponse:\n{final_response}\n---\n"
+    history_list = history.add_to_history(history_list, entry)
+    current_session_history.append(entry)
+    yield snapshot(final_response, model_name, None if is_error_response(final_response) else conversation_for(final_response))
 
 
-    # Return response text, session history text, model name, and updated session list
-    # Cleaning happens in execute_chat_or_team router
-    return final_response, "\n---\n".join(current_session_history), model_name, current_session_history
+def _iter_folder(folder_path, user_input, file_handling_option, llm_kwargs, entry_prefix, timestamp,
+                 actual_role_name, model_name, history_list, current_session_history, snapshot):
+    """Captions every image in a folder with a vision model, yielding a progress line per file."""
+    print(f"Processing image folder: {folder_path}")
+    confirmation_messages = []; processed_files = 0; skipped_files = 0
+    try:
+        files_in_folder = sorted([
+            f for f in os.listdir(folder_path)
+            if os.path.isfile(os.path.join(folder_path, f)) and is_image_filename(f)
+        ])
+    except Exception as list_e:
+        yield snapshot(f"Error listing folder: {list_e}", model_name); return
+
+    total = len(files_in_folder)
+    for index, file_name in enumerate(files_in_folder, start=1):
+        yield snapshot(f"⏳ Processing image {index}/{total}: {file_name}\n" + "\n".join(confirmation_messages), model_name)
+        file_path = os.path.join(folder_path, file_name)
+        loop_img = None
+        try:
+            if file_handling_option == "Skip" and os.path.exists(os.path.join(folder_path, f"{os.path.splitext(file_name)[0]}.txt")):
+                # Don't spend a model call on an image whose caption would be discarded anyway
+                confirmation_messages.append(f"  - {file_name}: Skipped (caption file exists)")
+                skipped_files += 1
+                continue
+            print(f"  Processing file: {file_name}")
+            loop_img = open_image(file_path) # Restricted to PNG/JPEG/BMP/GIF/WEBP decoders
+            image_prompt = f"{user_input or ''}\nImage Context: Analyzing '{file_name}'\n"
+            img_response = get_llm_response(prompt=image_prompt, images=[loop_img], **llm_kwargs)
+
+            # --- File Handling Logic ---
+            base_name = os.path.splitext(file_name)[0]
+            output_file = os.path.join(folder_path, f"{base_name}.txt")
+            action_taken = "Skipped"
+            file_exists = os.path.exists(output_file)
+            original_content = ""
+            usable = bool(img_response) and not is_error_response(img_response)
+
+            if file_exists and file_handling_option in ("Append", "Prepend"):
+                try:
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        original_content = f.read().strip()
+                except Exception as read_e:
+                    print(f"  Warning: Could not read existing file {output_file}: {read_e}")
+
+            if file_handling_option == "Overwrite" or not file_exists:
+                if usable:
+                    with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response)
+                    action_taken = "Written" if not file_exists else "Overwritten"
+                else: action_taken = "Skipped (Empty/Error Response)"
+            elif file_handling_option == "Append":
+                if usable:
+                    separator = "\n\n---\n\n" if original_content else ""
+                    with open(output_file, 'w', encoding='utf-8') as f: f.write(original_content + separator + img_response)
+                    action_taken = "Appended"
+                else: action_taken = "Skipped (Empty/Error Response)"
+            elif file_handling_option == "Prepend":
+                if usable:
+                    separator = "\n\n---\n\n" if original_content else ""
+                    with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response + separator + original_content)
+                    action_taken = "Prepended"
+                else: action_taken = "Skipped (Empty/Error Response)"
+
+            confirmation_messages.append(f"  - {file_name}: {action_taken} -> {base_name}.txt")
+            entry = f"{entry_prefix}\nImage: {file_name} [Data Sent]\nResponse:\n{img_response}\n---\n"
+            history_list = history.add_to_history(history_list, entry); current_session_history.append(entry); processed_files += 1
+
+        except Exception as e:
+            print(f"  Error processing file '{file_name}': {e}")
+            confirmation_messages.append(f"  - {file_name}: Error - {e}")
+            error_entry = f"Timestamp: {timestamp}\nRole: {actual_role_name}\nModel: {model_name}\nInput: {user_input}\nImage: {file_name}\nERROR: {e}\n---\n"
+            history_list = history.add_to_history(history_list, error_entry); current_session_history.append(error_entry)
+        finally:
+            if loop_img is not None:
+                try: loop_img.close()
+                except Exception as e_close: print(f"  Warning: Error closing loop image {file_name}: {e_close}")
+
+    if not files_in_folder: final_response = "No supported image files found in the directory."
+    elif processed_files == 0 and skipped_files == 0: final_response = "No images could be processed:\n" + "\n".join(confirmation_messages)
+    else: final_response = f"Folder processing complete ({processed_files} processed, {skipped_files} skipped):\n" + "\n".join(confirmation_messages)
+    yield snapshot(final_response, model_name)
+
+
+def chat_logic(*args, **kwargs) -> tuple[str, str, str | None, list]:
+    """Blocking single-agent call; same inputs as iter_chat_logic, returns the first four outputs."""
+    last = None
+    for last in iter_chat_logic(*args, **kwargs):
+        pass
+    return tuple(last[:4]) if last else ("Error: Processing failed.", "", None, [])
+
 
 # --- UI Callbacks ---
 

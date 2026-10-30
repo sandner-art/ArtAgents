@@ -1,6 +1,7 @@
 # ArtAgent/ui/captions_tab.py
 import gradio as gr
 from core.help_content import get_tooltip
+from core.captioning_logic import DEFAULT_CAPTION_INSTRUCTION, BATCH_SCOPE_ALL, BATCH_SCOPE_SELECTED
 
 # Signature remains the same (accepts models list)
 def create_captions_tab(initial_agent_team_choices, initial_vision_models):
@@ -60,6 +61,17 @@ def create_captions_tab(initial_agent_team_choices, initial_vision_models):
                         label="Select Agent/Team",
                         value=initial_agent_team_choices[0] if initial_agent_team_choices else None
                     )
+                    caption_instruction = gr.Textbox(
+                        label="Caption Instruction (sent with each image)",
+                        value=DEFAULT_CAPTION_INSTRUCTION, lines=2
+                    )
+                    with gr.Row():
+                        caption_prefix = gr.Textbox(
+                            label="Prefix (e.g. trigger word)", placeholder="e.g. 'ohwx style, '", scale=1
+                        )
+                        caption_suffix = gr.Textbox(
+                            label="Suffix", placeholder="e.g. ', film grain'", scale=1
+                        )
                     caption_generate_mode = gr.Radio(
                         ["Overwrite", "Skip", "Append", "Prepend"],
                         label="Generated Caption File Handling", value="Overwrite"
@@ -68,22 +80,32 @@ def create_captions_tab(initial_agent_team_choices, initial_vision_models):
                          "Generate Caption for SELECTED Image",
                          variant="secondary"
                     )
-                    caption_generate_all_button = gr.Button(
-                         "Generate Captions for ALL Loaded Images",
-                         variant="secondary"
-                    )
+                    with gr.Row():
+                        caption_generate_all_button = gr.Button(
+                             "Generate Captions for ALL Loaded Images",
+                             variant="secondary", scale=3
+                        )
+                        caption_stop_button = gr.Button("⏹ Stop", variant="stop", scale=1, elem_id="caption_stop")
 
                 captions_status_display = gr.Textbox(label="Status", interactive=False, lines=3)
 
-                with gr.Accordion("Manual Batch Append/Prepend (Requires Multi-Select - TBD)", open=False):
-                    gr.Markdown("Manually add text to captions for **multiple selected images** (Multi-select UI to be determined).")
-                    captions_batch_text = gr.Textbox(
-                        label="Text to Add"
+                with gr.Accordion("Batch Edit & Dataset Export", open=False):
+                    gr.Markdown("Add text (e.g. a LoRA trigger word or style tag) to existing captions. "
+                                "Text is added exactly as typed, so include your own separator.")
+                    captions_batch_scope = gr.Radio(
+                        [BATCH_SCOPE_ALL, BATCH_SCOPE_SELECTED], value=BATCH_SCOPE_ALL, label="Apply to"
                     )
+                    captions_batch_text = gr.Textbox(label="Text to Add")
                     with gr.Row():
-                        # Disabled until multi-select is implemented (setting .interactive after creation has no effect)
-                        captions_prepend_button = gr.Button("Prepend Text", interactive=False)
-                        captions_append_button = gr.Button("Append Text", interactive=False)
+                        captions_prepend_button = gr.Button("Prepend Text")
+                        captions_append_button = gr.Button("Append Text")
+                    gr.Markdown("---")
+                    with gr.Row():
+                        captions_export_format = gr.Dropdown(
+                            ["metadata.jsonl", "metadata.csv"], value="metadata.jsonl",
+                            label="Export captions for training (written into the image folder)", scale=3
+                        )
+                        captions_export_button = gr.Button("Export", scale=1)
 
 
     return {
@@ -94,6 +116,13 @@ def create_captions_tab(initial_agent_team_choices, initial_vision_models):
         "captions_caption_display": captions_caption_display,
         "captions_save_button": captions_save_button,
         "captions_batch_text": captions_batch_text,
+        "captions_batch_scope": captions_batch_scope,
+        "captions_export_format": captions_export_format,
+        "captions_export_button": captions_export_button,
+        "caption_instruction": caption_instruction,
+        "caption_prefix": caption_prefix,
+        "caption_suffix": caption_suffix,
+        "caption_stop_button": caption_stop_button,
         "captions_prepend_button": captions_prepend_button,
         "captions_append_button": captions_append_button,
         "captions_status_display": captions_status_display,

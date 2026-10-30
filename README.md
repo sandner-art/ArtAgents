@@ -12,8 +12,18 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ---
 
-##  Recent Updates 
-- (v0.9.5-alpha, October 2025)
+##  Recent Updates
+
+### v0.10 (October 2026): Image Generation, Live Streaming, Modern Ollama API
+
+*   **Image Generation tab:** generate images from your prompts with **ComfyUI** (any workflow exported in API format, see `image_workflows/README.md`), **Forge / AUTOMATIC1111 / SD.Next** (`--api`), or **Ollama image models** (experimental: Ollama removed image generation in v0.32.6, so this backend shows a clear message until it returns). Images are saved as PNG with the prompt and settings embedded, plus an optional `.txt` with the prompt. Use **🎨 Send to Image Generation** in the Chat tab to turn an answer into an image.
+*   **Live streaming + Stop:** answers appear token by token; team runs show each step as it is written. **⏹ Stop** buttons end chat, caption batches, sweeps and image jobs (the server stops generating too).
+*   **Modern Ollama connection:** uses `/api/chat` with real system prompts for agents, lists your **installed models automatically** with vision support detected (🔄 next to the model list), handles reasoning ("thinking") models, and no longer sends options current Ollama ignores. New starter models include **Gemma 4** (`gemma4:e4b`, `gemma4:12b`, `gemma4:26b`).
+*   **Comment/Refine is a real conversation:** each refinement continues the chat that produced the answer.
+*   **Captions:** custom caption instruction, trigger-word prefix/suffix, batch append/prepend, and export to `metadata.jsonl` / `metadata.csv` for training tools. `(Direct Agent Call)` now works everywhere (plain model call, no persona).
+*   **Fixes:** team runs with an uploaded image crashed; images never reached team steps; "Use Advanced Ollama API Options" was ignored and global `num_predict` overrode Max Tokens; "Unload Previous Model" never triggered; settings changes now apply without restart.
+
+### v0.9.5-alpha (October 2025)
 
 This project has undergone a significant technical upgrade and has been enhanced with new creative capabilities.
 
@@ -58,6 +68,7 @@ Three new teams have been added to `agent_teams.json` to leverage these strategi
 *   **Experiment Sweeps:** Systematically run base prompts across multiple selected Agent Teams and Worker Models. Saves detailed JSON protocol files for each run and separate `.txt` files containing the raw generated prompts per model.
 *   **Configuration Management:** External JSON files for easy customization of settings, models, limiters, API profiles, agent roles, and agent teams.
 *   **App Settings UI:** Dedicated tab to configure Ollama URL, agent loading preferences, default behaviors, UI theme, and detailed Ollama API parameters (with loadable profiles).
+*   **Image Generation:** ComfyUI, Forge / A1111 / SD.Next and Ollama image backends with progress, Stop, seeds, batch size and saved PNG metadata (configure server URLs and the output folder in App Settings).
 *   **Persistent History:** Logs all single interactions and detailed workflow steps to `core/history.json`, viewable and clearable in the "Full History" tab.
 *   **Utilities:** Copy-to-clipboard for responses, optional prompt artifact cleaning, model release functions, contextual help tooltips, setup scripts.
 *   **Modular Codebase:** Organized structure (`core`, `agents`, `ui`) for maintainability.

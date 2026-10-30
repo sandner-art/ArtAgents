@@ -1,0 +1,48 @@
+{
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "%checkpoint%" },
+    "_meta": { "title": "Load Checkpoint" }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": "%width%", "height": "%height%", "batch_size": "%batch_size%" },
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "%prompt%", "clip": ["4", 1] },
+    "_meta": { "title": "Positive Prompt" }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "%negative%", "clip": ["4", 1] },
+    "_meta": { "title": "Negative Prompt" }
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": "%seed%",
+      "steps": "%steps%",
+      "cfg": "%cfg%",
+      "sampler_name": "%sampler%",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": ["4", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "_meta": { "title": "KSampler" }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["3", 0], "vae": ["4", 2] },
+    "_meta": { "title": "VAE Decode" }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": { "filename_prefix": "ArtAgents", "images": ["8", 0] },
+    "_meta": { "title": "Save Image" }
+  }
+}

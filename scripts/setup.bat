@@ -40,13 +40,14 @@ ollama list
 echo.
 echo ==============================================================================
 echo =                                                                            =
-echo =  Models needed are listed in models.json (llava, llama3 recommended).      =
+echo =  Suggested models are listed in models.json. Any Ollama model you have   =
+echo =  installed also shows up in the app automatically.                         =
 echo =  Each model can be several GBs.                                            =
 echo =                                                                            =
-echo =  Do you want to attempt pulling recommended models now?                    =
-echo =  1. Pull 'llava:latest' (Vision Model)                                     =
-echo =  2. Pull 'llama3:latest' (Text Model)                                      =
-echo =  3. Pull 'impactframes/ifai_sd_prompt_mkr_q4km:latest' (Text Model)        =
+echo =  Do you want to pull recommended models now?                               =
+echo =  1. Pull 'gemma4:e4b' (Vision + text, ~10 GB, good default)                =
+echo =  2. Pull 'gemma4:12b' (Vision + text, better quality, ~8-13 GB)            =
+echo =  3. Pull 'impactframes/llama3_ifai_sd_prompt_mkr_q4km' (SD prompt maker)   =
 echo =  4. Pull ALL recommended above                                             =
 echo =  5. Pull NONE (you will manage models manually)                            =
 echo =                                                                            =
@@ -56,21 +57,21 @@ set /p choice="Enter your choice (1-5): "
 
 :: Pull models based on user choice
 if "%choice%"=="1" (
-    echo Pulling llava:latest...
-    ollama pull llava:latest
+    echo Pulling gemma4:e4b...
+    ollama pull gemma4:e4b
 ) else if "%choice%"=="2" (
-    echo Pulling llama3:latest...
-    ollama pull llama3:latest
+    echo Pulling gemma4:12b...
+    ollama pull gemma4:12b
 ) else if "%choice%"=="3" (
-    echo Pulling impactframes/ifai_sd_prompt_mkr_q4km:latest...
-    ollama pull impactframes/ifai_sd_prompt_mkr_q4km:latest
+    echo Pulling impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest...
+    ollama pull impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest
 ) else if "%choice%"=="4" (
-    echo Pulling llava:latest...
-    ollama pull llava:latest
-    echo Pulling llama3:latest...
-    ollama pull llama3:latest
-    echo Pulling impactframes/ifai_sd_prompt_mkr_q4km:latest...
-    ollama pull impactframes/ifai_sd_prompt_mkr_q4km:latest
+    echo Pulling gemma4:e4b...
+    ollama pull gemma4:e4b
+    echo Pulling gemma4:12b...
+    ollama pull gemma4:12b
+    echo Pulling impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest...
+    ollama pull impactframes/llama3_ifai_sd_prompt_mkr_q4km:latest
 ) else if "%choice%"=="5" (
     echo No models will be pulled automatically.
 ) else (

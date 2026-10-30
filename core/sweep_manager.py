@@ -50,7 +50,7 @@ def sanitize_filename(name):
     return name
 
 
-def run_sweep(
+def iter_sweep(
     base_prompts_text: str,
     selected_teams: list[str],
     selected_models: list[str],
@@ -61,8 +61,12 @@ def run_sweep(
     all_teams_data: dict,
     # Gradio progress object needs to be the *last* argument if used with type hints
     # progress=gr.Progress(track_tqdm=True) # Uncomment if using progress
-    ) -> str: # Returns final status message
+    ):
     """
+    Generator version: yields a status log after each run so the UI can show
+    progress and the Stop button can end the sweep between runs (files written
+    so far are kept). run_sweep() below returns only the final summary.
+
     Runs the experiment sweep based on selected prompts, teams, and models.
     Optimizes model switching and saves cleaned, one-prompt-per-line TXT files per model.
 
@@ -84,18 +88,18 @@ def run_sweep(
 
     # 1. Validate Inputs
     if not base_prompts_text or not base_prompts_text.strip():
-        return "Error: No base prompts provided."
+        yield "Error: No base prompts provided."; return
     if not selected_teams:
-        return "Error: No Agent Teams selected."
+        yield "Error: No Agent Teams selected."; return
     if not selected_models:
-        return "Error: No Worker Models selected."
+        yield "Error: No Worker Models selected."; return
 
     # Sanitize folder name slightly
     safe_folder_name = "".join(c for c in output_folder_name.strip() if c.isalnum() or c in ('-', '_'))
     if not safe_folder_name: safe_folder_name = "sweep_results"
 
     prompts = [p.strip() for p in base_prompts_text.strip().splitlines() if p.strip()]
-    if not prompts: return "Error: No valid prompts found after stripping."
+    if not prompts: yield "Error: No valid prompts found after stripping."; return
 
     # 2. Prepare Output Directory
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -105,7 +109,7 @@ def run_sweep(
         os.makedirs(output_dir, exist_ok=True)
         print(f"Output directory created: {output_dir}")
     except Exception as e:
-        return f"Error creating output directory '{output_dir}': {e}"
+        yield f"Error creating output directory '{output_dir}': {e}"; return
 
     # 3. Load necessary data (roles)
     try:
@@ -115,7 +119,7 @@ def run_sweep(
         if not all_roles_data:
              print("Warning: No agent roles loaded based on current settings. Workflows might fail.")
     except Exception as e:
-        return f"Error loading agent roles during sweep setup: {e}"
+        yield f"Error loading agent roles during sweep setup: {e}"; return
 
     # 4. Execute Sweep Loops --- >>> REORDERED LOOPS <<< ---
     total_runs = len(prompts) * len(selected_teams) * len(selected_models)
@@ -277,6 +281,8 @@ def run_sweep(
                     # Append concise status update for final summary
                     status_updates.append(f"Run {completed_runs + 1}: {run_label} -> {run_status[:100]}{'...' if len(run_status)>100 else ''}")
                     completed_runs += 1
+                    yield (f"⏳ Sweep running: {completed_runs}/{total_runs} runs done ({time.time() - start_time:.0f}s)\n"
+                           f"Output folder: {output_dir}\n\n" + "\n".join(status_updates[-20:]))
                     # Update progress if used
                     # progress(completed_runs / total_runs)
 
@@ -308,6 +314,12 @@ def run_sweep(
         f"Last {len(status_updates)} Run Statuses:\n" + "\n".join(status_updates[-20:]) # Show last 20 statuses
     )
     print(final_summary)
-    # Final progress update if used
-    # progress(1.0, desc="Sweep Complete!")
-    return final_summary
+    yield final_summary
+
+
+def run_sweep(*args, **kwargs) -> str:
+    """Blocking variant of iter_sweep: returns the final summary message."""
+    last = "Error: Sweep produced no output."
+    for last in iter_sweep(*args, **kwargs):
+        pass
+    return last

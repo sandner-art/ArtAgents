@@ -1,55 +1,30 @@
 # ArtAgent/core/refinement_logic.py
+"""
+Comment/Refine: continues the conversation that produced the current response.
 
+The chat tab keeps a `conversation` state ({"model", "role", "system", "messages"})
+from the last answer. A refinement is sent as the next user turn with the full
+history, so the model sees its own previous answer and earlier refinements.
+If there is no matching conversation (e.g. after a folder run or an app
+restart), it falls back to a one-shot "revise this text" prompt.
+"""
 import time
-# Import necessary functions/classes from sibling modules or agents
-from .utils import load_json # Assuming utils handles JSON loading if needed elsewhere
-from agents.roles_config import load_all_roles # To load roles if needed by agent call
-from agents.ollama_agent import get_llm_response # To call the LLM
-from . import history_manager as history # To log to history
 
-def comment_logic(
-    # Input parameters from UI/State
-    llm_response_text: str,           # Text currently in the response box
-    comment: str,                     # User's refinement instruction
-    max_tokens_ui: int,               # Max tokens setting from UI
-    use_ollama_api_options: bool,     # Flag from UI
-    model_with_vision: str | None,    # Model selected in the main dropdown
-    current_settings: dict,           # Current application settings state
-    file_agents_dict: dict,           # State of agents loaded from file
-    history_list_state: list,         # Persistent history list state
-    session_history_list_state: list  # Current session history list state
-    ) -> tuple[str, str, list]:       # Return: new_response, new_session_history_text, new_session_list
-    """
-    Handles the commenting/refinement logic using the currently selected model
-    and a structured prompt.
-    """
-    # Use copies of mutable state lists
-    history_list = list(history_list_state)
-    current_session_history = list(session_history_list_state) # This is the list we modify
+from agents.roles_config import load_all_roles
+from agents.ollama_agent import get_llm_response, stream_llm_response, is_error_response
+from . import history_manager as history
 
-    # Validate inputs
-    if not comment or not model_with_vision:
-        # Updated print message for clarity
-        print(f"Comment ignored: No comment text provided or no model selected (Comment: '{comment}', Model: '{model_with_vision}').")
-        # Return unchanged values, matching output signature (3 values)
-        return llm_response_text, "\n---\n".join(current_session_history), current_session_history
+FALLBACK_SYSTEM_PROMPT = (
+    "You are an AI assistant specialized in refining and modifying existing text based on user instructions. "
+    "Maintain the core essence of the original text unless the instruction explicitly asks for a fundamental change. "
+    "Output only the revised text."
+)
 
-    # Determine actual model name (strip vision tag if present)
-    # This logic might need refinement if models_data_state is needed, but typically dropdown value is sufficient
-    actual_model_name = model_with_vision.replace(" (VISION)", "")
 
-    # Load roles needed for the agent call
-    roles_data_current = load_all_roles(current_settings, file_agents=file_agents_dict)
-
-    print(f"Processing refinement using model {actual_model_name}...")
-
-    # Construct the structured refinement prompt
-    refiner_prompt = f"""**Role:** You are an AI assistant specialized in refining and modifying existing text based on user instructions.
-**Goal:** Modify the 'Original Text' below according to the 'User's Refinement Instruction'. Maintain the core essence of the original text unless the instruction explicitly asks for a fundamental change. Output only the revised text.
-
-**Original Text:**
+def _fallback_prompt(original_text: str, comment: str) -> str:
+    return f"""**Original Text:**
 ---
-{llm_response_text}
+{original_text}
 ---
 
 **User's Refinement Instruction:**
@@ -59,30 +34,78 @@ def comment_logic(
 
 **Revised Text:**
 """
-    # Define a generic role for the agent call itself
-    # We are embedding the persona in the prompt above
-    agent_call_role = "Refinement Assistant"
-    agent_ollama_options = {} # Agent function handles merging
 
-    # Call the LLM agent
-    response = get_llm_response(
-        role=agent_call_role,           # Generic role for the call
-        prompt=refiner_prompt,          # Use the structured prompt
-        model=actual_model_name,        # Use the currently selected model
-        settings=current_settings,
-        roles_data=roles_data_current,  # Pass roles data for potential option merging
-        images=None,                    # Comments don't process images directly
-        max_tokens=max_tokens_ui,       # Respect UI setting
-        ollama_api_options=agent_ollama_options
-    )
 
-    # Add entry to history logs
+def iter_comment_logic(
+    llm_response_text: str,
+    comment: str,
+    max_tokens_ui: int,
+    use_ollama_api_options: bool,
+    model_with_vision: str | None,
+    current_settings: dict,
+    file_agents_dict: dict,
+    history_list_state: list,
+    session_history_list_state: list,
+    conversation_state: dict | None = None,
+    ):
+    """
+    Streams a refinement of the current response.
+
+    Yields (response_text, session_history_text, session_history_list, conversation).
+    """
+    history_list = list(history_list_state or [])
+    current_session_history = list(session_history_list_state or [])
+
+    if not comment or not model_with_vision:
+        print(f"Comment ignored: No comment text provided or no model selected (Comment: '{comment}', Model: '{model_with_vision}').")
+        yield llm_response_text, "\n---\n".join(current_session_history), current_session_history, conversation_state
+        return
+
+    actual_model_name = model_with_vision.replace(" (VISION)", "")
+    roles_data_current = load_all_roles(current_settings, file_agents=file_agents_dict)
+
+    conversation = conversation_state if isinstance(conversation_state, dict) else None
+    messages = list(conversation.get("messages", [])) if conversation else []
+    continues_chat = bool(messages) and messages[-1].get("role") == "assistant" and messages[-1].get("content") == llm_response_text
+
+    if continues_chat:
+        system = conversation.get("system")
+        role = conversation.get("role") or "Refinement Assistant"
+        prompt, chat_history = comment, messages
+        mode = f"continuing conversation ({len(messages)} earlier messages)"
+    else:
+        system, role = FALLBACK_SYSTEM_PROMPT, "Refinement Assistant"
+        prompt, chat_history = _fallback_prompt(llm_response_text, comment), None
+        mode = "one-shot revision"
+    print(f"Processing refinement using model {actual_model_name} ({mode})...")
+
+    response = ""
+    for response in stream_llm_response(
+        role=role, prompt=prompt, model=actual_model_name, settings=current_settings,
+        roles_data=roles_data_current, images=None, max_tokens=max_tokens_ui,
+        system=system, history=chat_history, use_global_options=use_ollama_api_options,
+    ):
+        yield response, "\n---\n".join(current_session_history), current_session_history, None
+
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    # Log the actual model used and the specific action
     entry = f"Timestamp: {timestamp}\nAction: Refine Text (Comment)\nModel: {actual_model_name}\nRefinement Instruction: {comment}\nContext: Previous response text\nResponse:\n{response}\n---\n"
-    history_list = history.add_to_history(history_list, entry) # Update persistent history
-    current_session_history.append(entry) # Update session history copy
+    history_list = history.add_to_history(history_list, entry)
+    current_session_history.append(entry)
 
-    # Return new response text, new session history text, and new session history list
-    # Cleaning is generally not applied to comment responses unless specifically desired
-    return response, "\n---\n".join(current_session_history), current_session_history
+    if is_error_response(response):
+        new_conversation = conversation
+    else:
+        base_messages = messages if continues_chat else [{"role": "user", "content": prompt}]
+        new_conversation = {
+            "model": actual_model_name, "role": role, "system": system,
+            "messages": base_messages + ([{"role": "user", "content": comment}] if continues_chat else []) + [{"role": "assistant", "content": response}],
+        }
+    yield response, "\n---\n".join(current_session_history), current_session_history, new_conversation
+
+
+def comment_logic(*args, **kwargs) -> tuple[str, str, list]:
+    """Blocking variant; returns (new_response, session_history_text, session_history_list)."""
+    last = None
+    for last in iter_comment_logic(*args, **kwargs):
+        pass
+    return tuple(last[:3])

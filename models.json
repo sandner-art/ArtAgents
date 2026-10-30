@@ -1,7 +1,28 @@
 [
     {
+        "name": "gemma4:e4b",
+        "vision": true,
+        "notes": "Google Gemma 4 E4B (default 'gemma4' tag, ~10 GB). Good all-rounder for captions and prompts."
+    },
+    {
+        "name": "gemma4:12b",
+        "vision": true,
+        "notes": "Gemma 4 12B (~8 GB at Q4). Better descriptions, still fits a 12 GB GPU."
+    },
+    {
+        "name": "gemma4:26b",
+        "vision": true,
+        "notes": "Gemma 4 26B MoE, 4B active (~18 GB). High quality, fast for its size."
+    },
+    {
+        "name": "llama3.2-vision:11b",
+        "vision": true,
+        "notes": "Meta Llama 3.2 Vision 11B."
+    },
+    {
         "name": "llava:latest",
-        "vision": true
+        "vision": true,
+        "notes": "Older but small vision model."
     },
     {
         "name": "llama3:latest",

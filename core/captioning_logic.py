@@ -7,6 +7,8 @@ import time
 from .app_logic import execute_chat_or_team
 from .image_utils import IMAGE_EXTENSIONS, make_thumbnail, open_image
 
+DEFAULT_CAPTION_INSTRUCTION = "Describe this image concisely. Focus on the main subject, action, and setting. Do not add commentary."
+
 # --- Function to load images and prepare data for Gallery ---
 def load_images_and_captions(folder_path: str):
     """
@@ -182,21 +184,91 @@ def save_caption(
         return status, (caption_data_dict if isinstance(caption_data_dict, dict) else {})
 
 
-# --- Function for manual batch editing ---
-# Needs Redesign for Gallery multi-select - Currently Non-functional
+# --- Manual batch editing ---
+BATCH_SCOPE_ALL = "All loaded images"
+BATCH_SCOPE_SELECTED = "Selected image only"
+
+
+def _caption_path(image_path: str) -> str:
+    return os.path.splitext(image_path)[0] + ".txt"
+
+
 def batch_edit_captions(
-    selected_items_from_gallery: list | None, # Placeholder input
+    scope: str,
+    selected_filename: str | None,
     text_to_add: str,
-    mode: str,
+    mode: str, # "Append" or "Prepend"
     image_paths_dict: dict,
-    caption_data_dict: dict
+    caption_data_dict: dict,
     ) -> tuple[str, dict]:
     """
-    Appends or prepends text to the captions of selected images.
-    *** CURRENTLY INCOMPATIBLE WITH GALLERY - Needs redesign for multi-select ***
+    Appends or prepends text (e.g. a LoRA trigger word or style tag) to captions
+    and writes them to the .txt files. Images without a caption get the text alone.
+    Text is added verbatim, so include your own separator (e.g. "ohwx, ").
     """
-    print("Warning: Batch edit caption logic needs redesign for Gallery component.")
-    return ("Batch edit feature needs update for Gallery UI.", caption_data_dict)
+    captions = dict(caption_data_dict or {})
+    if not text_to_add:
+        return "Enter the text to add first.", captions
+    if not image_paths_dict:
+        return "No images loaded.", captions
+    if scope == BATCH_SCOPE_SELECTED:
+        if not selected_filename or selected_filename not in image_paths_dict:
+            return "Select an image in the gallery first (or choose 'All loaded images').", captions
+        targets = [selected_filename]
+    else:
+        targets = list(image_paths_dict.keys())
+
+    changed, errors = 0, []
+    for filename in targets:
+        current = captions.get(filename, "")
+        if mode == "Prepend":
+            new_caption = text_to_add + current
+        else:
+            new_caption = current + text_to_add
+        try:
+            with open(_caption_path(image_paths_dict[filename]), "w", encoding="utf-8") as f:
+                f.write(new_caption)
+            captions[filename] = new_caption
+            changed += 1
+        except OSError as e:
+            errors.append(f"{filename}: {e}")
+    status = f"{mode}ed text to {changed} caption file(s)."
+    if errors:
+        status += " Errors:\n" + "\n".join(errors)
+    print(status)
+    return status, captions
+
+
+def export_caption_dataset(image_paths_dict: dict, caption_data_dict: dict, export_format: str) -> str:
+    """
+    Writes metadata.jsonl ({"file_name", "text"} per line; Hugging Face imagefolder /
+    diffusers training format) or metadata.csv (file_name,text) next to the images.
+    """
+    import csv
+    import json as _json
+    if not image_paths_dict:
+        return "No images loaded."
+    folder = os.path.dirname(next(iter(image_paths_dict.values())))
+    rows = [(name, (caption_data_dict or {}).get(name, "")) for name in sorted(image_paths_dict)]
+    missing = sum(1 for _, text in rows if not text.strip())
+    try:
+        if export_format == "metadata.csv":
+            out_path = os.path.join(folder, "metadata.csv")
+            with open(out_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["file_name", "text"])
+                writer.writerows(rows)
+        else:
+            out_path = os.path.join(folder, "metadata.jsonl")
+            with open(out_path, "w", encoding="utf-8") as f:
+                for name, text in rows:
+                    f.write(_json.dumps({"file_name": name, "text": text}, ensure_ascii=False) + "\n")
+    except OSError as e:
+        return f"Error writing dataset file: {e}"
+    status = f"Exported {len(rows)} caption(s) to {out_path}."
+    if missing:
+        status += f" Warning: {missing} image(s) have an empty caption."
+    return status
 
 
 # --- Functions for Agent Caption Generation ---
@@ -215,10 +287,16 @@ def generate_captions_for_selected(
     teams_data: dict,
     file_agents: dict,
     history_list: list,
-    session_history: list
+    session_history: list,
+    caption_instruction: str | None = None,
+    caption_prefix: str = "",
+    caption_suffix: str = "",
     ) -> tuple[str, dict, str, list]:
     """
     Generates caption for the currently selected image using an agent/team and model.
+
+    caption_instruction overrides the default "describe this image" prompt;
+    caption_prefix / caption_suffix (e.g. a LoRA trigger word) are added verbatim.
     """
     print("\n--- Running: Generate Caption for Selected Image ---")
     start_time = time.time()
@@ -226,8 +304,8 @@ def generate_captions_for_selected(
     # --- Updated input checks ---
     if not selected_filename:
         return "No image selected in the gallery.", current_captions, "", session_history
-    if not agent_or_team_display_name or agent_or_team_display_name == "(Direct Agent Call)":
-         return "Please select a valid Agent or Team for captioning.", current_captions, "", session_history
+    if not agent_or_team_display_name:
+         return "Please select an Agent, a Team or '(Direct Agent Call)' for captioning.", current_captions, "", session_history
     if not selected_model_display_name:
          return "Please select a Vision Model for captioning.", current_captions, "", session_history
 
@@ -252,7 +330,7 @@ def generate_captions_for_selected(
     last_caption_generated = "" # Store the caption for display
 
     current_session_history = list(session_history)
-    fixed_prompt = "Describe this image concisely. Focus on the main subject, action, and setting. Do not add commentary."
+    fixed_prompt = (caption_instruction or "").strip() or DEFAULT_CAPTION_INSTRUCTION
 
     # --- File handling check ---
     print(f"  Processing selected: {selected_filename}")
@@ -311,10 +389,10 @@ def generate_captions_for_selected(
         if not generated_caption or generated_caption.startswith("Error:"):
              raise ValueError(f"Agent/Team returned empty or error response: '{generated_caption}'")
 
-        last_caption_generated = generated_caption
         print(f"    Generated Caption (Stripped): {generated_caption[:100]}...")
 
         action_taken = ""
+        generated_caption = f"{caption_prefix or ''}{generated_caption}{caption_suffix or ''}"
         final_caption_to_write = generated_caption
 
         if generate_mode == "Append":
@@ -332,6 +410,9 @@ def generate_captions_for_selected(
             with open(text_path, 'w', encoding='utf-8') as f:
                 f.write(final_caption_to_write)
             updated_captions[selected_filename] = final_caption_to_write
+            # Show exactly what is in the .txt (incl. prefix/suffix and appended text),
+            # so "Save THIS Caption" writes back the same content.
+            last_caption_generated = final_caption_to_write
             msg = f"- Success {selected_filename}: Caption generated and file {action_taken}."
             print(f"    {msg}")
             status_messages.append(msg)
@@ -365,7 +446,7 @@ def generate_captions_for_selected(
     return final_status, updated_captions, last_caption_generated, current_session_history
 
 # MODIFIED: Loops and calls the MODIFIED generate_captions_for_selected
-def generate_captions_for_all(
+def iter_generate_captions_for_all(
     image_paths: dict,
     current_captions: dict,
     agent_or_team_display_name: str,
@@ -377,74 +458,79 @@ def generate_captions_for_all(
     teams_data: dict,
     file_agents: dict,
     history_list: list,
-    session_history: list
-    ) -> tuple[str, dict, str, list]:
+    session_history: list,
+    caption_instruction: str | None = None,
+    caption_prefix: str = "",
+    caption_suffix: str = "",
+    progress=None,
+    ):
     """
-    Generates captions for ALL loaded images using an agent/team by calling
-    the single-image generation logic repeatedly.
+    Generates captions for ALL loaded images, one at a time.
+
+    Yields (status, captions_dict, last_caption, session_history) after every
+    image, so the UI shows progress and the Stop button can end the batch
+    between images (files already written are kept).
     """
     print("\n--- Running: Generate Captions for ALL ---")
     start_time = time.time()
 
-    # Input validation
-    if not image_paths: return "No images loaded.", current_captions, "", session_history
-    if not selected_model_display_name: return "Please select a Vision Model.", current_captions, "", session_history
-    if not agent_or_team_display_name or agent_or_team_display_name == "(Direct Agent Call)": return "Please select Agent/Team.", current_captions, "", session_history
+    if not image_paths:
+        yield "No images loaded.", current_captions, "", session_history; return
+    if not selected_model_display_name:
+        yield "Please select a Vision Model.", current_captions, "", session_history; return
+    if not agent_or_team_display_name:
+        yield "Please select an Agent, a Team or '(Direct Agent Call)'.", current_captions, "", session_history; return
 
-    all_filenames = sorted(list(image_paths.keys()))
+    all_filenames = sorted(image_paths.keys())
+    total = len(all_filenames)
     batch_status_messages = []
-    # Start with copies of the state dicts/lists that will be modified
-    batch_updated_captions = current_captions.copy()
-    batch_session_history = list(session_history)
-    # Persistent history is passed but assumed updated within the called function via history_manager
-    batch_history_list = list(history_list)
+    batch_updated_captions = dict(current_captions or {})
+    batch_session_history = list(session_history or [])
+    batch_history_list = list(history_list or [])
+    overall_processed = overall_errors = overall_skipped = 0
+    last_caption = ""
 
-    overall_processed = 0
-    overall_errors = 0
-    overall_skipped = 0
-    last_caption = "" # Store the very last generated caption from the batch
+    def summary(done: int, finished: bool) -> str:
+        head = (f"Batch Caption generation finished in {time.time() - start_time:.2f}s.\n" if finished
+                else f"⏳ Captioning {done}/{total} ({time.time() - start_time:.0f}s elapsed)...\n")
+        return (head + f"Overall: Processed={overall_processed}, Errors={overall_errors}, Skipped={overall_skipped}.\n\n"
+                + "--- Details ---\n" + "\n".join(batch_status_messages))
 
-    # Loop through all filenames and call the *single-image* generation logic
-    for filename in all_filenames:
-         # Call the single-image function, passing the *current* state of captions/history
-         single_status, single_updated_captions, single_last_caption, single_updated_session = generate_captions_for_selected(
-             selected_filename=filename, # Pass the single filename
-             agent_or_team_display_name=agent_or_team_display_name,
-             selected_model_display_name=selected_model_display_name,
-             generate_mode=generate_mode,
-             image_paths=image_paths, # Pass the original full dict
-             current_captions=batch_updated_captions, # Pass the running updated dict
-             settings=settings,
-             models_data=models_data,
-             limiters_data=limiters_data,
-             teams_data=teams_data,
-             file_agents=file_agents,
-             history_list=batch_history_list, # Pass the persistent list copy
-             session_history=batch_session_history # Pass the running session list
-         )
+    for index, filename in enumerate(all_filenames, start=1):
+        if progress is not None:
+            progress((index - 1) / total, desc=f"Captioning {filename} ({index}/{total})")
+        single_status, batch_updated_captions, single_last_caption, batch_session_history = generate_captions_for_selected(
+            selected_filename=filename,
+            agent_or_team_display_name=agent_or_team_display_name,
+            selected_model_display_name=selected_model_display_name,
+            generate_mode=generate_mode,
+            image_paths=image_paths,
+            current_captions=batch_updated_captions,
+            settings=settings,
+            models_data=models_data,
+            limiters_data=limiters_data,
+            teams_data=teams_data,
+            file_agents=file_agents,
+            history_list=batch_history_list,
+            session_history=batch_session_history,
+            caption_instruction=caption_instruction,
+            caption_prefix=caption_prefix,
+            caption_suffix=caption_suffix,
+        )
+        if single_last_caption: last_caption = single_last_caption
+        if "Status: Success." in single_status: overall_processed += 1
+        elif "Status: Error." in single_status: overall_errors += 1
+        elif "Status: Skipped." in single_status: overall_skipped += 1
+        detail_lines = single_status.split('\n', 1)[1] if '\n' in single_status else "(No details)"
+        batch_status_messages.append(f"--- {filename} ---\n{detail_lines}")
+        yield summary(index, finished=index == total), batch_updated_captions, last_caption, batch_session_history
 
-         # Update running state for the next iteration based on the *return* values
-         batch_updated_captions = single_updated_captions
-         batch_session_history = single_updated_session
-         if single_last_caption: last_caption = single_last_caption # Keep the latest non-empty caption
+    print(summary(total, finished=True))
 
-         # Parse status for counts (more robustly)
-         if "Status: Success." in single_status: overall_processed += 1
-         elif "Status: Error." in single_status: overall_errors += 1
-         elif "Status: Skipped." in single_status: overall_skipped += 1
-         # Add formatted status for this file to the batch list
-         # Extract detail lines after the first summary line
-         detail_lines = single_status.split('\n', 1)[1] if '\n' in single_status else "(No details)"
-         batch_status_messages.append(f"--- {filename} ---\n{detail_lines}")
 
-    # Compile final batch status
-    end_time = time.time()
-    duration = end_time - start_time
-    final_status = (f"Batch Caption generation finished in {duration:.2f}s.\n"
-                    f"Overall: Processed={overall_processed}, Errors={overall_errors}, Skipped={overall_skipped}.\n\n"
-                    + "--- Details ---\n"
-                    + "\n".join(batch_status_messages))
-    print(final_status)
-
-    # Return final state after the loop
-    return final_status, batch_updated_captions, last_caption, batch_session_history
+def generate_captions_for_all(*args, **kwargs) -> tuple[str, dict, str, list]:
+    """Blocking variant of iter_generate_captions_for_all; returns its final update."""
+    last = None
+    for last in iter_generate_captions_for_all(*args, **kwargs):
+        pass
+    return last

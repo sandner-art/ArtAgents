@@ -18,8 +18,13 @@ try:
         update_caption_display_from_gallery,
         save_caption,
         batch_edit_captions,
+        export_caption_dataset,
         generate_captions_for_selected,
         generate_captions_for_all,
+        iter_generate_captions_for_all,
+        BATCH_SCOPE_ALL,
+        BATCH_SCOPE_SELECTED,
+        DEFAULT_CAPTION_INSTRUCTION,
     )
     from core.image_utils import THUMBNAIL_MAX_SIDE
 except ImportError as e:
@@ -250,13 +255,86 @@ def test_save_caption_write_error(mock_file_write, caption_test_folder):
     assert updated_data == caption_data
 
 
-# --- batch_edit_captions (disabled in the UI until multi-select exists) ---
+# --- batch_edit_captions / export_caption_dataset ---
 
-def test_batch_edit_is_disabled_placeholder():
-    caption_data = {"img.png": "cap"}
-    status, updated_data = batch_edit_captions(["img.png"], "text", "Append", {"img.png": "path"}, caption_data)
-    assert "needs update" in status
-    assert updated_data == caption_data
+@pytest.mark.parametrize("mode, expected_1, expected_3", [
+    ("Append", "Caption for image 1., ohwx", ", ohwx"),
+    ("Prepend", "ohwx, Caption for image 1.", "ohwx, "),
+])
+def test_batch_edit_all_images(caption_test_folder, mode, expected_1, expected_3):
+    paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image3.webp")}
+    captions = {"image1.png": "Caption for image 1.", "image3.webp": ""}
+    text = ", ohwx" if mode == "Append" else "ohwx, "
+    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, text, mode, paths, captions)
+    assert status == f"{mode}ed text to 2 caption file(s)."
+    assert updated == {"image1.png": expected_1, "image3.webp": expected_3}
+    assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == expected_1
+    assert (caption_test_folder / "image3.txt").read_text(encoding="utf-8") == expected_3 # Created for uncaptioned image
+    assert captions["image1.png"] == "Caption for image 1." # Input state not mutated
+
+
+def test_batch_edit_selected_only(caption_test_folder):
+    paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image2.jpg")}
+    captions = {"image1.png": "one", "image2.jpg": "two"}
+    status, updated = batch_edit_captions(BATCH_SCOPE_SELECTED, "image2.jpg", " (tag)", "Append", paths, captions)
+    assert status == "Appended text to 1 caption file(s)."
+    assert updated == {"image1.png": "one", "image2.jpg": "two (tag)"}
+    assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == "Caption for image 1." # Untouched
+
+
+@pytest.mark.parametrize("scope, selected, text, paths, expected", [
+    (BATCH_SCOPE_ALL, None, "", {"a.png": "/x/a.png"}, "Enter the text to add first."),
+    (BATCH_SCOPE_ALL, None, "t", {}, "No images loaded."),
+    (BATCH_SCOPE_SELECTED, None, "t", {"a.png": "/x/a.png"}, "Select an image in the gallery first"),
+    (BATCH_SCOPE_SELECTED, "zzz.png", "t", {"a.png": "/x/a.png"}, "Select an image in the gallery first"),
+])
+def test_batch_edit_validation(scope, selected, text, paths, expected):
+    with patch("builtins.open") as mock_file:
+        status, updated = batch_edit_captions(scope, selected, text, "Append", paths, {"a.png": "cap"})
+    assert status.startswith(expected)
+    assert updated == {"a.png": "cap"}
+    mock_file.assert_not_called()
+
+
+def test_batch_edit_reports_write_errors(caption_test_folder):
+    paths = {"image1.png": str(caption_test_folder / "image1.png"), "ghost.png": str(caption_test_folder / "nodir" / "ghost.png")}
+    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, "!", "Append", paths, {"image1.png": "c", "ghost.png": "g"})
+    assert status.startswith("Appended text to 1 caption file(s). Errors:")
+    assert "ghost.png" in status
+    assert updated == {"image1.png": "c!", "ghost.png": "g"} # Failed file keeps its old caption
+
+
+def test_export_caption_dataset_jsonl(caption_test_folder):
+    import json
+    paths = {n: str(caption_test_folder / n) for n in ("image2.jpg", "image1.png", "image3.webp")}
+    captions = {"image1.png": "Cap 1", "image2.jpg": "Cap \"2\", ünïcode"}
+    status = export_caption_dataset(paths, captions, "metadata.jsonl")
+    out = caption_test_folder / "metadata.jsonl"
+    assert status == f"Exported 3 caption(s) to {out}. Warning: 1 image(s) have an empty caption."
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert rows == [
+        {"file_name": "image1.png", "text": "Cap 1"},
+        {"file_name": "image2.jpg", "text": "Cap \"2\", ünïcode"},
+        {"file_name": "image3.webp", "text": ""},
+    ]
+
+
+def test_export_caption_dataset_csv(caption_test_folder):
+    import csv
+    paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image2.jpg")}
+    captions = {"image1.png": "plain", "image2.jpg": "with, comma\nand newline"}
+    status = export_caption_dataset(paths, captions, "metadata.csv")
+    out = caption_test_folder / "metadata.csv"
+    assert status == f"Exported 2 caption(s) to {out}."
+    with open(out, encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows == [["file_name", "text"], ["image1.png", "plain"], ["image2.jpg", "with, comma\nand newline"]]
+
+
+def test_export_caption_dataset_errors(tmp_path):
+    assert export_caption_dataset({}, {}, "metadata.jsonl") == "No images loaded."
+    paths = {"a.png": str(tmp_path / "missing_dir" / "a.png")}
+    assert export_caption_dataset(paths, {"a.png": "x"}, "metadata.jsonl").startswith("Error writing dataset file:")
 
 
 # --- Tests for generate_captions_for_selected ---
@@ -266,10 +344,51 @@ def test_generate_caption_validation_errors(caption_test_folder):
     args = {**COMMON_ARGS, "image_paths": paths, "current_captions": {}, "generate_mode": "Overwrite"}
     with patch(EXECUTE_PATH) as mock_execute:
         assert "No image selected" in generate_captions_for_selected(None, **args)[0]
-        assert "valid Agent or Team" in generate_captions_for_selected("image1.png", **{**args, "agent_or_team_display_name": "(Direct Agent Call)"})[0]
+        assert "Please select an Agent, a Team or '(Direct Agent Call)'" in generate_captions_for_selected("image1.png", **{**args, "agent_or_team_display_name": ""})[0]
         assert "Vision Model" in generate_captions_for_selected("image1.png", **{**args, "selected_model_display_name": ""})[0]
         assert "Image path not found" in generate_captions_for_selected("missing.png", **args)[0]
     mock_execute.assert_not_called()
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A plain description."))
+def test_generate_caption_with_direct_agent_call(mock_execute, caption_test_folder):
+    """'(Direct Agent Call)' is allowed for captioning: the instruction goes straight to the model."""
+    paths = {"image1.png": str(caption_test_folder / "image1.png")}
+    status, captions, *_ = generate_captions_for_selected(
+        "image1.png", generate_mode="Overwrite", image_paths=paths, current_captions={},
+        **{**COMMON_ARGS, "agent_or_team_display_name": "(Direct Agent Call)"})
+    assert "Status: Success." in status
+    assert captions["image1.png"] == "A plain description."
+    assert mock_execute.call_args.kwargs["selected_role_or_team"] == "(Direct Agent Call)"
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("a cat on a sofa"))
+def test_generate_caption_instruction_prefix_suffix(mock_execute, caption_test_folder):
+    paths = {"image3.webp": str(caption_test_folder / "image3.webp")}
+    status, captions, last_caption, _ = generate_captions_for_selected(
+        "image3.webp", generate_mode="Overwrite", image_paths=paths, current_captions={},
+        caption_instruction="  List tags only.  ", caption_prefix="ohwx style, ", caption_suffix=", film grain",
+        **COMMON_ARGS)
+    assert mock_execute.call_args.kwargs["user_input"] == "List tags only."
+    assert captions["image3.webp"] == "ohwx style, a cat on a sofa, film grain"
+    assert (caption_test_folder / "image3.txt").read_text(encoding="utf-8") == "ohwx style, a cat on a sofa, film grain"
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("a cat on a sofa"))
+def test_displayed_caption_matches_written_caption_with_prefix(mock_execute, caption_test_folder):
+    paths = {"image3.webp": str(caption_test_folder / "image3.webp")}
+    _, captions, last_caption, _ = generate_captions_for_selected(
+        "image3.webp", generate_mode="Overwrite", image_paths=paths, current_captions={},
+        caption_prefix="ohwx style, ", caption_suffix=", film grain", **COMMON_ARGS)
+    assert last_caption == captions["image3.webp"] == "ohwx style, a cat on a sofa, film grain"
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("x"))
+def test_generate_caption_blank_instruction_uses_default(mock_execute, caption_test_folder):
+    paths = {"image3.webp": str(caption_test_folder / "image3.webp")}
+    generate_captions_for_selected("image3.webp", generate_mode="Overwrite", image_paths=paths, current_captions={},
+                                   caption_instruction="   ", **COMMON_ARGS)
+    assert mock_execute.call_args.kwargs["user_input"] == DEFAULT_CAPTION_INSTRUCTION
 
 
 @patch(EXECUTE_PATH, return_value=_agent_returns("  A white square.  "))
@@ -364,6 +483,42 @@ def test_generate_captions_for_all_success(mock_execute, tmp_path):
 def test_generate_captions_for_all_validation():
     assert generate_captions_for_all({}, {}, "Captioner", "m", "Overwrite", {}, [], {}, {}, {}, [], [])[0] == "No images loaded."
     assert "Vision Model" in generate_captions_for_all({"a": "p"}, {}, "Captioner", "", "Overwrite", {}, [], {}, {}, {}, [], [])[0]
+    assert "Please select an Agent" in generate_captions_for_all({"a": "p"}, {}, "", "m", "Overwrite", {}, [], {}, {}, {}, [], [])[0]
+
+
+@patch(EXECUTE_PATH, side_effect=[_agent_returns("Cap A"), _agent_returns("Cap B"), _agent_returns("Cap C")])
+def test_iter_generate_captions_for_all_yields_per_image(mock_execute, tmp_path):
+    for name in ("a.png", "b.png", "c.png"):
+        _make_image(tmp_path / name)
+    paths = {n: str(tmp_path / n) for n in ("c.png", "a.png", "b.png")}
+    progress_calls = []
+    updates = list(iter_generate_captions_for_all(
+        paths, {}, "Captioner", "vision-model (VISION)", "Overwrite", {}, [], {}, {}, {}, [], [],
+        caption_prefix="tok, ", progress=lambda frac, desc=None: progress_calls.append((frac, desc))))
+    assert len(updates) == 3 # One update per image
+    assert updates[0][0].startswith("⏳ Captioning 1/3")
+    assert updates[0][1] == {"a.png": "tok, Cap A"} # Sorted order, running caption dict
+    assert updates[1][0].startswith("⏳ Captioning 2/3")
+    assert updates[-1][0].startswith("Batch Caption generation finished")
+    assert "Processed=3, Errors=0, Skipped=0" in updates[-1][0]
+    assert updates[-1][1] == {"a.png": "tok, Cap A", "b.png": "tok, Cap B", "c.png": "tok, Cap C"}
+    assert [round(f, 2) for f, _ in progress_calls] == [0.0, 0.33, 0.67]
+    assert progress_calls[0][1] == "Captioning a.png (1/3)"
+
+
+@patch(EXECUTE_PATH, side_effect=[_agent_returns("Cap A"), _agent_returns("Cap B")])
+def test_iter_generate_captions_for_all_stop_keeps_written_files(mock_execute, tmp_path):
+    """Closing the generator (UI Stop) between images keeps the captions already written."""
+    for name in ("a.png", "b.png"):
+        _make_image(tmp_path / name)
+    paths = {n: str(tmp_path / n) for n in ("a.png", "b.png")}
+    gen = iter_generate_captions_for_all(paths, {}, "Captioner", "vision-model (VISION)", "Overwrite", {}, [], {}, {}, {}, [], [])
+    first = next(gen)
+    gen.close()
+    assert first[1] == {"a.png": "Cap A"}
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "Cap A"
+    assert not (tmp_path / "b.txt").exists()
+    assert mock_execute.call_count == 1
 
 
 

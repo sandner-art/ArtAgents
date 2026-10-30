@@ -1,387 +1,268 @@
 # ArtAgent/tests/test_agent_manager.py
-
-import pytest
+"""Tests for core/agent_manager.py (team workflows, streaming generator + blocking wrapper)."""
 import os
 import sys
-import time
-from unittest.mock import patch, MagicMock, call # Import call for checking multiple calls
+from unittest.mock import patch
 
-# --- Adjust import path ---
+import numpy as np
+import pytest
+from PIL import Image
+
 test_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(test_dir)
-sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.dirname(test_dir))
 
-try:
-    from core.agent_manager import run_team_workflow
-    # We will mock the dependencies called *by* run_team_workflow
-    GET_LLM_RESPONSE_PATH = 'core.agent_manager.get_llm_response'
-    ADD_TO_HISTORY_PATH = 'core.agent_manager.history.add_to_history'
-    TIME_STRFTIME_PATH = 'core.agent_manager.time.strftime' # To make timestamps predictable
-except ImportError as e:
-    pytest.skip(f"Skipping agent_manager tests, modules not found: {e}", allow_module_level=True)
+from core.agent_manager import TeamProgress, TeamResult, iter_team_workflow, load_agent_teams, run_team_workflow
 
-
-# --- Test Data ---
+STREAM_PATH = 'core.agent_manager.stream_llm_response'
+GET_LLM_RESPONSE_PATH = 'core.agent_manager.get_llm_response'
+ADD_TO_HISTORY_PATH = 'core.agent_manager.history.add_to_history'
+TIME_STRFTIME_PATH = 'core.agent_manager.time.strftime'
 
 MOCK_SETTINGS = {
-    "ollama_url": "http://fake-manager-test:11434/api/generate",
-    "ollama_api_options": {"seed": 100},
-    "sweep_step_max_tokens": 500, # For intermediate steps
-    # Add other settings if run_team_workflow uses them directly
+    "ollama_base_url": "http://fake-manager-test:11434",
+    "sweep_step_max_tokens": 500,
+    "summary_step_max_tokens": 900,
 }
-
 MOCK_ROLES_DATA = {
     "RoleA": {"description": "Performs task A."},
     "RoleB": {"description": "Performs task B."},
-    "RoleC_Refiner": {"description": "Refines previous steps."}
+    "RoleC_Refiner": {"description": "Refines previous steps."},
 }
-
-# Team Definitions
 TEAM_CONCAT = {
-    "description": "Concatenate A and B.",
-    "assembly_strategy": "concatenate",
-    "steps": [
-        {"role": "RoleA", "goal": "Generate part A"},
-        {"role": "RoleB", "goal": "Generate part B based on A"}
-    ]
+    "description": "Concatenate A and B.", "assembly_strategy": "concatenate",
+    "steps": [{"role": "RoleA", "goal": "Generate part A"}, {"role": "RoleB", "goal": "Generate part B based on A"}],
 }
-
 TEAM_REFINE = {
-    "description": "Refine A and B with C.",
-    "assembly_strategy": "refine_last",
-    "steps": [
-        {"role": "RoleA", "goal": "Generate part A"},
-        {"role": "RoleB", "goal": "Generate part B based on A"},
-        {"role": "RoleC_Refiner", "goal": "Refine A and B"}
-    ]
+    "description": "Refine A and B with C.", "assembly_strategy": "refine_last",
+    "steps": [{"role": "RoleA", "goal": "A"}, {"role": "RoleB", "goal": "B"}, {"role": "RoleC_Refiner", "goal": "Refine"}],
 }
-
 TEAM_MISSING_ROLE = {
-    "description": "Team with a missing role.",
-    "assembly_strategy": "concatenate",
-    "steps": [
-        {"role": "RoleA"},
-        {"goal": "Step without a role"} # Missing "role" key
-    ]
+    "description": "Team with a missing role.", "assembly_strategy": "concatenate",
+    "steps": [{"role": "RoleA"}, {"goal": "Step without a role"}],
 }
-
-TEAM_INVALID_DEF = None # Test invalid input
-
 USER_INPUT = "Initial user request."
 WORKER_MODEL = "test-worker-model"
-MOCK_TIMESTAMP = "2024-01-01 12:00:00" # For predictable logs
+MOCK_TIMESTAMP = "2024-01-01 12:00:00"
 
 
-# --- Tests ---
+def streaming(*answers):
+    """side_effect for stream_llm_response: each call streams one answer in two growing pieces."""
+    remaining = list(answers)
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None) # Mock history logging
-@patch(GET_LLM_RESPONSE_PATH) # Mock the agent call
-def test_run_team_workflow_concat_success(mock_get_llm, mock_add_history, mock_strftime):
-    """Test successful execution of a 'concatenate' workflow."""
-    # Define agent outputs
-    mock_get_llm.side_effect = [
-        "Output from RoleA.",
-        "Output from RoleB."
-    ]
-
-    final_output, history_list, intermediate = run_team_workflow(
-        team_name="ConcatTeam",
-        team_definition=TEAM_CONCAT,
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[], # Start with empty persistent history list for this run
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=False
-    )
-
-    # Assertions on final output
-    # 'concatenate' joins raw outputs; per-agent labels belong to 'structured_concatenate'
-    expected_output = "Output from RoleA.\n\nOutput from RoleB."
-    assert final_output == expected_output
-    assert intermediate is None # Not requested
-
-    # Assertions on mock calls
-    assert mock_get_llm.call_count == 2
-    calls = mock_get_llm.call_args_list
-
-    # Call 1 (RoleA)
-    args_a, kwargs_a = calls[0]
-    assert kwargs_a['role'] == "RoleA"
-    assert kwargs_a['model'] == WORKER_MODEL
-    assert kwargs_a['settings'] == MOCK_SETTINGS
-    assert kwargs_a['roles_data'] == MOCK_ROLES_DATA
-    assert kwargs_a['max_tokens'] == MOCK_SETTINGS['sweep_step_max_tokens']
-    prompt_a = kwargs_a['prompt']
-    assert f"User Request: {USER_INPUT}" in prompt_a
-    assert "Your Role: RoleA - Performs task A." in prompt_a
-    assert "Your Goal for this step: Generate part A" in prompt_a
-    assert "Step 1 (RoleA) Output:" not in prompt_a # First step has no prior output
-
-    # Call 2 (RoleB)
-    args_b, kwargs_b = calls[1]
-    assert kwargs_b['role'] == "RoleB"
-    prompt_b = kwargs_b['prompt']
-    assert f"User Request: {USER_INPUT}" in prompt_b # Context carries over
-    assert "Step 1 (RoleA) Output:\nOutput from RoleA." in prompt_b # Check context passing
-    assert "Your Role: RoleB - Performs task B." in prompt_b
-    assert "Your Goal for this step: Generate part B based on A" in prompt_b
-
-    # Assertions on history logging (check number of calls and key contents)
-    assert mock_add_history.call_count == 4 # Start + Step1 + Step2 + Final
-    history_calls = mock_add_history.call_args_list
-    assert "Workflow Start: 'ConcatTeam'" in history_calls[0].args[1]
-    assert f"Workflow Step 1: 'RoleA'" in history_calls[1].args[1]
-    assert "Output:\nOutput from RoleA." in history_calls[1].args[1]
-    assert f"Workflow Step 2: 'RoleB'" in history_calls[2].args[1]
-    assert "Output:\nOutput from RoleB." in history_calls[2].args[1]
-    assert "Workflow End: 'ConcatTeam'" in history_calls[3].args[1]
-    assert f"Final Output:\n{expected_output}" in history_calls[3].args[1]
+    def _fake(**kwargs):
+        answer = remaining.pop(0)
+        if answer.startswith("⚠️ Error:"):
+            return iter([answer])
+        return iter([answer[: max(1, len(answer) // 2)], answer])
+    return _fake
 
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH)
-def test_run_team_workflow_refine_success(mock_get_llm, mock_add_history, mock_strftime):
-    """Test successful execution of a 'refine_last' workflow."""
-    mock_get_llm.side_effect = [
-        "Output from RoleA.",
-        "Output from RoleB.",
-        "Final refined output from RoleC." # Only this should be returned
-    ]
-
-    final_output, history_list, intermediate = run_team_workflow(
-        team_name="RefineTeam",
-        team_definition=TEAM_REFINE,
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[],
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=False
-    )
-
-    # Assertions on final output
-    assert final_output == "Final refined output from RoleC."
-    assert intermediate is None
-
-    # Assertions on mock calls
-    assert mock_get_llm.call_count == 3
-    calls = mock_get_llm.call_args_list
-
-    # Check context passing to the last step
-    args_c, kwargs_c = calls[2]
-    assert kwargs_c['role'] == "RoleC_Refiner"
-    prompt_c = kwargs_c['prompt']
-    assert "Step 1 (RoleA) Output:\nOutput from RoleA." in prompt_c
-    assert "Step 2 (RoleB) Output:\nOutput from RoleB." in prompt_c
-    assert "Your Role: RoleC_Refiner - Refines previous steps." in prompt_c
-    assert "Your Goal for this step: Refine A and B" in prompt_c
-
-    # Assertions on history logging
-    assert mock_add_history.call_count == 5 # Start + 3 Steps + Final
-    history_calls = mock_add_history.call_args_list
-    assert "Workflow Start: 'RefineTeam'" in history_calls[0].args[1]
-    assert "Workflow Step 1: 'RoleA'" in history_calls[1].args[1]
-    assert "Workflow Step 2: 'RoleB'" in history_calls[2].args[1]
-    assert "Workflow Step 3: 'RoleC_Refiner'" in history_calls[3].args[1]
-    assert "Output:\nFinal refined output from RoleC." in history_calls[3].args[1]
-    assert "Workflow End: 'RefineTeam'" in history_calls[4].args[1]
-    assert "Assembly Strategy: refine_last" in history_calls[4].args[1]
-    assert "Final Output:\nFinal refined output from RoleC." in history_calls[4].args[1]
+def run(team, **kwargs):
+    args = dict(team_name="T", team_definition=team, user_input=USER_INPUT, initial_settings=MOCK_SETTINGS,
+                all_roles_data=MOCK_ROLES_DATA, history_list=[], worker_model_name=WORKER_MODEL)
+    args.update(kwargs)
+    return run_team_workflow(**args)
 
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH)
-def test_run_team_workflow_return_intermediate(mock_get_llm, mock_add_history, mock_strftime):
-    """Test returning the intermediate steps dictionary."""
-    mock_get_llm.side_effect = ["Output A", "Output B"]
-
-    _, _, intermediate = run_team_workflow( # Use _ for unused outputs
-        team_name="IntermediateTest",
-        team_definition=TEAM_CONCAT, # Use simple concat team
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[],
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=True # Request intermediate steps
-    )
-
-    assert intermediate is not None
-    assert isinstance(intermediate, dict)
-    assert len(intermediate) == 2
-
-    # Check step 1 data
-    step1_data = intermediate.get(1)
-    assert step1_data is not None
-    assert step1_data['role'] == "RoleA"
-    assert step1_data['goal'] == "Generate part A"
-    assert step1_data['output'] == "Output A"
-    assert step1_data['error'] is None
-
-    # Check step 2 data
-    step2_data = intermediate.get(2)
-    assert step2_data is not None
-    assert step2_data['role'] == "RoleB"
-    assert step2_data['goal'] == "Generate part B based on A"
-    assert step2_data['output'] == "Output B"
-    assert step2_data['error'] is None
+def events(team, **kwargs):
+    args = dict(team_name="T", team_definition=team, user_input=USER_INPUT, initial_settings=MOCK_SETTINGS,
+                all_roles_data=MOCK_ROLES_DATA, history_list=[], worker_model_name=WORKER_MODEL)
+    args.update(kwargs)
+    return list(iter_team_workflow(**args))
 
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH) # Still need to patch, though it won't be called
-def test_run_team_workflow_invalid_definition(mock_get_llm, mock_add_history, mock_strftime):
-    """Test passing an invalid team definition."""
-    final_output, _, intermediate = run_team_workflow(
-        team_name="InvalidTeam",
-        team_definition=TEAM_INVALID_DEF, # Pass None
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[],
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=True
-    )
-
-    assert "Error: Invalid team definition provided" in final_output
-    assert intermediate is None # Should be None on early error exit
-    mock_get_llm.assert_not_called() # Agent should not run
-
-    # Check history log for the error
-    assert mock_add_history.call_count == 1
-    assert "Workflow Start Error: 'InvalidTeam'" in mock_add_history.call_args.args[1]
-    assert "Error: Invalid team definition provided" in mock_add_history.call_args.args[1]
+@pytest.fixture(autouse=True)
+def _quiet_history():
+    with patch(ADD_TO_HISTORY_PATH, side_effect=lambda hist, entry: (hist or []) + [entry]) as mock_hist, \
+         patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP):
+        yield mock_hist
 
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH)
-def test_run_team_workflow_missing_role_in_step(mock_get_llm, mock_add_history, mock_strftime):
-    """Test workflow skips a step if 'role' is missing."""
-    mock_get_llm.return_value = "Output from RoleA." # Only RoleA should run
+# --- Concatenate / step prompts ---
 
-    final_output, _, intermediate = run_team_workflow(
-        team_name="MissingRoleTeam",
-        team_definition=TEAM_MISSING_ROLE,
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[],
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=True
-    )
-
-    # Assembly is concat, only RoleA ran. Step 2 was skipped.
-    expected_output = "Output from RoleA."
-    assert final_output == expected_output
-
-    # Check agent calls
-    mock_get_llm.assert_called_once() # Only RoleA called
-    assert mock_get_llm.call_args.kwargs['role'] == "RoleA"
-
-    # Check history
-    assert mock_add_history.call_count == 4 # Start + Step1 (run) + Step2 (skip) + Final
-    history_calls = mock_add_history.call_args_list
-    assert "Workflow Start: 'MissingRoleTeam'" in history_calls[0].args[1]
-    assert "Workflow Step 1: 'RoleA'" in history_calls[1].args[1]
-    assert "Workflow Step 2 Skipped ('MissingRoleTeam')" in history_calls[2].args[1] # Check skip log
-    assert "Reason: Missing 'role' definition" in history_calls[2].args[1]
-    assert "Workflow End: 'MissingRoleTeam'" in history_calls[3].args[1] # Should still reach end
-
-    # Check intermediate data
-    assert intermediate is not None
-    assert len(intermediate) == 2
-    assert intermediate[1]['output'] == "Output from RoleA."
-    assert intermediate[1]['error'] is None
-    assert intermediate[2]['role'] is None # Role was missing
-    assert intermediate[2]['output'] is None
-    assert "missing 'role'" in intermediate[2]['error']
+def test_concat_success_and_prompts():
+    with patch(STREAM_PATH, side_effect=streaming("Output A", "Output B")) as mock_stream:
+        final, hist, steps = run(TEAM_CONCAT)
+    assert final == "Output A\n\nOutput B"
+    assert steps is None # Not requested
+    assert mock_stream.call_count == 2
+    first, second = (c.kwargs for c in mock_stream.call_args_list)
+    # Persona goes into the system prompt, not the user prompt
+    assert first["system"] == "You are 'RoleA', one agent in a creative team workflow.\nPerforms task A."
+    assert "Your Role" not in first["prompt"] and "RoleA" not in first["prompt"]
+    assert "User Request: Initial user request." in first["prompt"]
+    assert "Your Goal for this step: Generate part A" in first["prompt"]
+    assert first["model"] == WORKER_MODEL and first["max_tokens"] == 500 and first["images"] is None
+    # Step 2 sees step 1's output as context
+    assert "Step 1 (RoleA) Output:\nOutput A" in second["prompt"]
+    assert any("Workflow End: 'T'" in entry for entry in hist)
 
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH)
-def test_run_team_workflow_agent_error(mock_get_llm, mock_add_history, mock_strftime):
-    """Test workflow stops if an agent returns an error."""
-    agent_error_message = "⚠️ Error: Agent B failed spectacularly."
-    mock_get_llm.side_effect = [
-        "Output from RoleA.",
-        agent_error_message # RoleB returns an error
-    ]
-
-    final_output, _, intermediate = run_team_workflow(
-        team_name="AgentErrorTeam",
-        team_definition=TEAM_CONCAT, # Use 2-step concat team
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[],
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=True
-    )
-
-    # Assertions on final output
-    assert final_output.startswith("Workflow stopped due to error in step 2 (RoleB)")
-    assert agent_error_message in final_output
-
-    # Assertions on mock calls
-    assert mock_get_llm.call_count == 2 # Called A and B (which failed)
-
-    # Check history
-    assert mock_add_history.call_count == 3 # Start + Step1 (success) + Step2 (error)
-    history_calls = mock_add_history.call_args_list
-    assert "Workflow Start: 'AgentErrorTeam'" in history_calls[0].args[1]
-    assert "Workflow Step 1: 'RoleA'" in history_calls[1].args[1]
-    assert "Workflow Step 2 Error ('RoleB')" in history_calls[2].args[1] # Check error log
-    assert f"Error Message: {agent_error_message}" in history_calls[2].args[1]
-
-    # Check intermediate data (should include up to the error)
-    assert intermediate is not None
-    assert len(intermediate) == 2
-    assert intermediate[1]['output'] == "Output from RoleA."
-    assert intermediate[1]['error'] is None
-    assert intermediate[2]['role'] == "RoleB"
-    assert intermediate[2]['output'] is None
-    assert intermediate[2]['error'] == agent_error_message
+def test_iter_yields_progress_then_single_result():
+    with patch(STREAM_PATH, side_effect=streaming("Output A", "Output B")):
+        evs = events(TEAM_CONCAT)
+    assert isinstance(evs[-1], TeamResult)
+    assert sum(isinstance(e, TeamResult) for e in evs) == 1
+    progress = [e for e in evs if isinstance(e, TeamProgress)]
+    assert progress[0] == TeamProgress(1, 2, "RoleA", "", "Step 1/2: RoleA")
+    assert TeamProgress(1, 2, "RoleA", "Outp", "Step 1/2: RoleA") in progress # Streamed partial
+    assert any(p.step == 2 and p.partial_output == "Output B" for p in progress)
+    assembling = progress[-1]
+    assert assembling.step == 0 and "Assembling final output (concatenate)" in assembling.message
 
 
-@patch(TIME_STRFTIME_PATH, return_value=MOCK_TIMESTAMP)
-@patch(ADD_TO_HISTORY_PATH, return_value=None)
-@patch(GET_LLM_RESPONSE_PATH)
-def test_run_team_workflow_no_successful_steps(mock_get_llm, mock_add_history, mock_strftime):
-    """Test assembly when no steps succeed."""
-    agent_error_message = "⚠️ Error: Agent failed."
-    mock_get_llm.side_effect = [
-        agent_error_message, # RoleA fails
-        agent_error_message  # RoleB fails
-    ]
+def test_unknown_role_gets_default_description():
+    team = {"steps": [{"role": "Ghost"}]}
+    with patch(STREAM_PATH, side_effect=streaming("boo")) as mock_stream:
+        run(team)
+    assert mock_stream.call_args.kwargs["system"].endswith("Perform your function.")
+    assert "Your Goal for this step: Execute step 1" in mock_stream.call_args.kwargs["prompt"]
 
-    final_output, _, intermediate = run_team_workflow(
-        team_name="AllFailTeam",
-        team_definition=TEAM_CONCAT,
-        user_input=USER_INPUT,
-        initial_settings=MOCK_SETTINGS,
-        all_roles_data=MOCK_ROLES_DATA,
-        history_list=[],
-        worker_model_name=WORKER_MODEL,
-        return_intermediate_steps=True
-    )
 
-    # Final output comes from the *first* error encountered
-    assert final_output.startswith("Workflow stopped due to error in step 1 (RoleA)")
+# --- Other strategies ---
 
-    # Check intermediate steps (only step 1 is guaranteed to be recorded before exit)
-    assert intermediate is not None
-    assert len(intermediate) == 1
-    assert intermediate[1]['role'] == "RoleA"
-    assert intermediate[1]['output'] is None
-    assert intermediate[1]['error'] == agent_error_message
-    assert 2 not in intermediate # Step 2 not reached
+def test_refine_last_returns_last_output():
+    with patch(STREAM_PATH, side_effect=streaming("A", "B", "Refined final")):
+        final, _, _ = run(TEAM_REFINE)
+    assert final == "Refined final"
 
-    # Check history
-    assert mock_add_history.call_count == 2 # Start + Step1 (error)
-    assert "Workflow Step 1 Error ('RoleA')" in mock_add_history.call_args_list[1].args[1]
+
+def test_structured_concatenate_adds_headers():
+    team = dict(TEAM_CONCAT, assembly_strategy="structured_concatenate")
+    with patch(STREAM_PATH, side_effect=streaming("A out", "B out")):
+        final, _, _ = run(team)
+    assert final == "--- Output from Agent: RoleA (Step 1) ---\nA out\n\n--- Output from Agent: RoleB (Step 2) ---\nB out"
+
+
+def test_summarize_all_calls_summarizer():
+    team = dict(TEAM_CONCAT, assembly_strategy="summarize_all")
+    with patch(STREAM_PATH, side_effect=streaming("A out", "B out")), \
+         patch(GET_LLM_RESPONSE_PATH, return_value="Summary") as mock_get:
+        final, _, _ = run(team)
+    assert final == "Summary"
+    kwargs = mock_get.call_args.kwargs
+    assert kwargs["max_tokens"] == 900 and "Output from Step 1 (RoleA):\nA out" in kwargs["prompt"]
+
+
+def test_summarize_all_error_is_reported():
+    team = dict(TEAM_CONCAT, assembly_strategy="summarize_all")
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")), \
+         patch(GET_LLM_RESPONSE_PATH, return_value="⚠️ Error: down"):
+        final, _, _ = run(team)
+    assert final == "Error during final summarization step: ⚠️ Error: down"
+
+
+@pytest.mark.parametrize("strategy, n_calls", [("metaphorical_synthesis", 2), ("stylistic_mashup", 2), ("conceptual_blend", 1)])
+def test_creative_strategies_use_assembly_calls(strategy, n_calls):
+    team = dict(TEAM_CONCAT, assembly_strategy=strategy)
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")), \
+         patch(GET_LLM_RESPONSE_PATH, side_effect=['"a lighthouse"', "Creative final"][-n_calls:]) as mock_get:
+        final, _, _ = run(team)
+    assert final == "Creative final"
+    assert mock_get.call_count == n_calls
+    if n_calls == 2:
+        assert "a lighthouse" in mock_get.call_args_list[1].kwargs["prompt"] # Quotes stripped, reused
+
+
+def test_unknown_strategy_falls_back_to_concatenate():
+    team = dict(TEAM_CONCAT, assembly_strategy="does-not-exist")
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")):
+        final, _, _ = run(team)
+    assert final == "A\n\nB"
+
+
+# --- Intermediate steps, errors ---
+
+def test_return_intermediate_steps():
+    with patch(STREAM_PATH, side_effect=streaming("Out A", "Out B")):
+        _, _, steps = run(TEAM_CONCAT, return_intermediate_steps=True)
+    assert steps == {
+        1: {"role": "RoleA", "goal": "Generate part A", "output": "Out A", "error": None},
+        2: {"role": "RoleB", "goal": "Generate part B based on A", "output": "Out B", "error": None},
+    }
+
+
+@pytest.mark.parametrize("bad", [None, {}, {"steps": "nope"}])
+def test_invalid_definition(bad):
+    with patch(STREAM_PATH) as mock_stream:
+        final, hist, steps = run(bad)
+    assert final.startswith("Error: Invalid team definition")
+    assert steps is None
+    mock_stream.assert_not_called()
+    assert any("Workflow Start Error" in e for e in hist)
+
+
+def test_missing_role_step_is_skipped():
+    with patch(STREAM_PATH, side_effect=streaming("Only A")) as mock_stream:
+        final, hist, steps = run(TEAM_MISSING_ROLE, return_intermediate_steps=True)
+    assert final == "Only A"
+    assert mock_stream.call_count == 1
+    assert steps[2]["output"] is None and "missing 'role'" in steps[2]["error"]
+    assert any("Workflow Step 2 Skipped" in e for e in hist)
+
+
+def test_agent_error_stops_workflow():
+    with patch(STREAM_PATH, side_effect=streaming("A ok", "⚠️ Error: model crashed", "never")) as mock_stream:
+        final, hist, steps = run(TEAM_REFINE, return_intermediate_steps=True)
+    assert final == "Workflow stopped due to error in step 2 (RoleB): ⚠️ Error: model crashed"
+    assert mock_stream.call_count == 2 # Step 3 never runs
+    assert steps[2]["error"] == "⚠️ Error: model crashed"
+    assert any("Workflow Step 2 Error" in e for e in hist)
+
+
+def test_no_successful_steps():
+    team = {"assembly_strategy": "concatenate", "steps": [{"goal": "no role"}]}
+    with patch(STREAM_PATH) as mock_stream:
+        final, _, _ = run(team)
+    mock_stream.assert_not_called()
+    assert final.startswith("Error: No successful outputs")
+
+
+def test_run_team_workflow_without_result_event():
+    with patch('core.agent_manager.iter_team_workflow', return_value=iter([TeamProgress(1, 1, "R", "", "")])):
+        final, hist, steps = run_team_workflow(history_list=["h"])
+    assert final.startswith("Error: Workflow ended without a result") and hist == ["h"] and steps is None
+
+
+# --- Images ---
+
+def test_numpy_image_does_not_crash_and_reaches_vision_model():
+    """Regression: `if image:` on a numpy array raised 'The truth value of an array ... is ambiguous'."""
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream:
+        final, hist, _ = run(TEAM_CONCAT, single_image_input=image, worker_model_has_vision=True)
+    assert final == "A\n\nB"
+    sent = mock_stream.call_args_list[0].kwargs["images"]
+    assert len(sent) == 1 and isinstance(sent[0], Image.Image) and sent[0].size == (8, 8)
+    assert "Input includes a single image." in mock_stream.call_args_list[0].kwargs["prompt"]
+    assert any("Image Provided: Yes" in e for e in hist)
+
+
+def test_image_not_sent_to_non_vision_model():
+    image = Image.new("RGB", (4, 4))
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream:
+        run(TEAM_CONCAT, single_image_input=image, worker_model_has_vision=False)
+    assert all(c.kwargs["images"] is None for c in mock_stream.call_args_list)
+
+
+def test_vision_falls_back_to_settings_models_data_when_flag_missing():
+    settings = dict(MOCK_SETTINGS, loaded_models_data=[{"name": WORKER_MODEL, "vision": True}])
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream:
+        run(TEAM_CONCAT, initial_settings=settings, single_image_input=Image.new("RGB", (2, 2)))
+    assert mock_stream.call_args_list[0].kwargs["images"] is not None
+
+
+def test_empty_numpy_image_is_treated_as_no_image():
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream:
+        _, hist, _ = run(TEAM_CONCAT, single_image_input=np.zeros((0,), dtype=np.uint8), worker_model_has_vision=True)
+    assert mock_stream.call_args_list[0].kwargs["images"] is None
+    assert any("Image Provided: No" in e for e in hist)
+
+
+# --- load_agent_teams ---
+
+def test_load_agent_teams():
+    with patch('core.agent_manager.load_json', return_value={"T": TEAM_CONCAT}):
+        assert load_agent_teams() == {"T": TEAM_CONCAT}
+    with patch('core.agent_manager.load_json', return_value=[]):
+        assert load_agent_teams() == {}

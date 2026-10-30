@@ -169,3 +169,6 @@ app_fullproject.txt
 history.json
 /sweep_runs
 /venv_gradio5
+
+# Generated images
+/outputs

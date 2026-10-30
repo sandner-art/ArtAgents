@@ -15,6 +15,9 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: Show exactly which Python is used (helps when several are installed)
+python -c "import sys, struct; print('Using Python', sys.version.split()[0], str(struct.calcsize('P') * 8) + '-bit', 'at', sys.executable)"
+
 :: Pillow 13 (security fixes) requires Python 3.11 or newer
 python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"
 if %errorlevel% neq 0 (
@@ -68,9 +71,11 @@ if %errorlevel% neq 0 (
 
 :: Step 2: patched Pillow (gradio still declares pillow<13, so this is installed on its own)
 echo Installing patched Pillow from requirements-pillow.txt...
-python -m pip install --no-deps -r requirements-pillow.txt
+python -m pip install --no-deps --only-binary=:all: -r requirements-pillow.txt
 if %errorlevel% neq 0 (
-    echo ERROR: Failed to install Pillow from requirements-pillow.txt.
+    echo ERROR: Failed to install Pillow 13 from requirements-pillow.txt.
+    echo        Pillow 13 has ready-made Windows packages for Python 3.11 to 3.15, so this is
+    echo        usually a network/proxy problem. Check the error above, then run this script again.
     pause
     exit /b 1
 )

@@ -12,6 +12,7 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
         selected_model_tracker = gr.State(None) # Tracks dropdown value before submit
         model_state = gr.State(None) # Stores model name used in last run
         loaded_file_agents_state = gr.State({}) # Store file agents temporarily
+        conversation_state = gr.State(None) # Chat history of the last answer, used by Comment/Refine
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -38,9 +39,13 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
                         value=initial_roles_list[0] if initial_roles_list else None,
                         elem_id="role_dropdown"
                     )
-                    model_with_vision = gr.Dropdown(
-                        initial_models_list, label="Select Model", elem_id="model_dropdown"
-                    )
+                    with gr.Row():
+                        model_with_vision = gr.Dropdown(
+                            initial_models_list, label="Select Model", elem_id="model_dropdown",
+                            value=initial_models_list[0] if initial_models_list else None, scale=5
+                        )
+                        refresh_models_button = gr.Button("🔄", scale=0, min_width=50, elem_id="refresh_models")
+                    models_status_display = gr.Markdown("", elem_id="models_status")
                     user_input = gr.Textbox(
                         label="User Input / Prompt Instructions", lines=3,
                         placeholder="Enter your main prompt or instructions here...", elem_id="user_input"
@@ -85,7 +90,9 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
 
         with gr.Row():
              submit_button = gr.Button("✨ Generate Response", variant="primary", scale=2)
+             stop_button = gr.Button("⏹ Stop", variant="stop", scale=1, elem_id="chat_stop")
              comment_button = gr.Button("💬 Comment/Refine", scale=1)
+             send_to_image_button = gr.Button("🎨 Send to Image Generation", scale=1)
              clear_session_button = gr.Button("🧹 Clear Session History", scale=1)
 
         with gr.Row():
@@ -122,6 +129,11 @@ def create_chat_tab(initial_roles_list, initial_models_list, initial_limiters_li
         "agent_file_upload": agent_file_upload,
         "loaded_agent_file_display": loaded_agent_file_display,
         "submit_button": submit_button,
+        "stop_button": stop_button,
+        "send_to_image_button": send_to_image_button,
+        "refresh_models_button": refresh_models_button,
+        "models_status_display": models_status_display,
+        "conversation_state": conversation_state,
         "comment_button": comment_button,
         "clear_session_button": clear_session_button,
         "llm_response_display": llm_response_display,

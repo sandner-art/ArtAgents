@@ -102,3 +102,45 @@ def encode_image_for_ollama(img: Image.Image) -> str:
     buffered = io.BytesIO()
     prepared.save(buffered, format=save_format)
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+
+def to_pil_image(value) -> Image.Image | None:
+    """
+    Normalises an image coming from the UI (PIL image, numpy array or None) to PIL.
+
+    Never use `if image:` on these values: a numpy array has no single truth
+    value, which is what crashed team runs with an uploaded image.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Image.Image):
+        return value
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - numpy ships with gradio
+        np = None
+    if np is not None and isinstance(value, np.ndarray):
+        if value.size == 0:
+            return None
+        array = value
+        if array.dtype != np.uint8:
+            array = np.clip(array, 0, 255).astype(np.uint8)
+        return Image.fromarray(array)
+    raise TypeError(f"Unsupported image input type: {type(value).__name__}")
+
+
+# Formats accepted from image generation servers (ComfyUI /view, A1111/Ollama base64).
+GENERATED_IMAGE_FORMATS = ("PNG", "JPEG", "WEBP")
+
+
+def open_image_bytes(data: bytes, formats: tuple[str, ...] = GENERATED_IMAGE_FORMATS) -> Image.Image:
+    """
+    Decodes image bytes received over the network, restricted to PNG/JPEG/WEBP.
+
+    The image is fully loaded and detached from the buffer. Raises
+    PIL.UnidentifiedImageError for anything else (and Pillow's
+    DecompressionBombError for absurdly large images).
+    """
+    with Image.open(io.BytesIO(data), formats=formats) as img:
+        img.load()
+        return img.copy()
