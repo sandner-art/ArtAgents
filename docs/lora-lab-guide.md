@@ -55,13 +55,17 @@ has its own seeded generator.
   or see the same folder).
 - **GRADIENT options** apply to every image of the sweep: scheduler, precision (the list depends on the checkpoint
   and your GPU), VAE, and a CFG override that also takes GRADIENT's schedules (`linear(9,3)`, `9@0,4@20`).
-- Sizes are rounded down to multiples of 8. Steps or CFG missing from the validation set fall back to GRADIENT's
-  defaults (25 steps, CFG 7.5): set them for distilled or turbo models. The Test Sweep says so before it starts.
+- Sizes are rounded down to multiples of 8. Steps or CFG missing from the validation set come from GRADIENT's
+  recommended settings for the checkpoint (models from its catalog have them), else from GRADIENT's defaults
+  (25 steps, CFG 7.5): set them for distilled or turbo models. The Test Sweep says which before it starts.
 - ArtAgents keeps up to 8 jobs queued ahead in GRADIENT, ordered so each LoRA loads once. The jobs are labelled
   `ArtAgents · LoRA test · <run> · <condition> · seed <n>` in GRADIENT's queue; `run.json` keeps each image's
   GRADIENT output id. **Stop** cancels the sweep's queued jobs (your own GRADIENT jobs are left alone).
-- A LoRA that does not fit the checkpoint (another model family) is recorded as an error instead of an image that
-  only looks like the baseline. (GRADIENT 0.9.0 only logs this; a GRADIENT that reports skipped LoRAs is needed.)
+- With GRADIENT 0.9.1 or later, the whole sweep is one run in GRADIENT's gallery (type *Group*, titled
+  `ArtAgents · LoRA test · <run>`), every image is tagged `ArtAgents/LoRA test/<name>` and remembers which job,
+  prompt and condition it was. A LoRA that does not fit the checkpoint (another model family) is recorded as an
+  error instead of an image that only looks like the baseline. GRADIENT 0.9.0 renders the sweep too, without
+  these.
 - If GRADIENT runs on another machine with an API token, put it in **GRADIENT API token** (not saved) or set
   `ARTAGENTS_GRADIENT_TOKEN` before starting ArtAgents.
 

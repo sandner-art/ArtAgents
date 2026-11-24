@@ -105,7 +105,7 @@ def gradient_extra(job: Job, run_dir: str, meta: dict, options: dict | None = No
     extra = {k: v for k, v in (options or {}).items() if v not in (None, "")}
     extra.update({
         "label": f"ArtAgents · LoRA test · {name} · {job.condition} · seed {job.seed}",
-        "group": f"artagents-{run}",
+        "group": f"ArtAgents · LoRA test · {run}",  # One gallery run in GRADIENT (0.9.1+)
         "tags": [f"ArtAgents/LoRA test/{name}"],
         "origin": {"app": "ArtAgents", "run": run, "job_index": job.index, "prompt_index": job.prompt_index,
                    "bucket": job.bucket, "condition": job.condition},

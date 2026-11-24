@@ -48,6 +48,7 @@ class FakeGradient:
         self.fail = fail or set()          # Payload seeds whose jobs fail
         self.skipped = skipped or {}       # LoRA name -> reported as not applied
         self.token = token
+        self.local_calls = 0
         self.mock = MagicMock()
         self.mock.exceptions = requests.exceptions
         self.mock.get.side_effect = lambda url, **kw: self.route("GET", url, **kw)
@@ -66,6 +67,13 @@ class FakeGradient:
             return FakeResp(200, ["tiny-sd", "flux-dev"])
         if method == "GET" and path == "/system/models/loras":
             return FakeResp(200, ["style_e04.safetensors"])
+        if method == "GET" and path == "/models/local":
+            kind = (kw.get("params") or {}).get("type")
+            self.local_calls += 1
+            models = {"diffusers": [{"name": "tiny-sd", "defaults": None},
+                                    {"name": "flux-dev", "defaults": {"steps": 28, "guidance_scale": 3.5, "width": None}}],
+                      "checkpoints": [{"name": "turbo.safetensors", "defaults": {"steps": 4, "guidance_scale": 0.0}}]}
+            return FakeResp(200, models.get(kind, []))
         if method == "GET" and path == "/system/models/vae":
             return FakeResp(200, ["vae-ft-mse"])
         if method == "GET" and path == "/system/schedulers":
@@ -120,6 +128,13 @@ class FakeGradient:
                                  "performance_ms": 5, **({"loras_skipped": skipped} if skipped else {})}
         view = {k: v for k, v in job.items() if k not in ("body", "polls")}
         return view
+
+
+@pytest.fixture(autouse=True)
+def no_cached_defaults():
+    gmod._defaults_cache.clear()
+    yield
+    gmod._defaults_cache.clear()
 
 
 @pytest.fixture
@@ -393,7 +408,7 @@ def test_gradient_extra(tmp_path):
                               {"quantization": "bf16", "vae_id": "", "guidance": None})
     assert extra["quantization"] == "bf16" and "vae_id" not in extra and "guidance" not in extra
     assert extra["label"].startswith("ArtAgents · LoRA test · mine · ") and extra["label"].endswith(f"seed {job.seed}")
-    assert extra["group"] == "artagents-20260101-120000-mine" and extra["tags"] == ["ArtAgents/LoRA test/mine"]
+    assert extra["group"] == "ArtAgents · LoRA test · 20260101-120000-mine" and extra["tags"] == ["ArtAgents/LoRA test/mine"]
     assert extra["origin"] == {"app": "ArtAgents", "run": "20260101-120000-mine", "job_index": job.index,
                                "prompt_index": job.prompt_index, "bucket": job.bucket, "condition": job.condition}
 
@@ -435,7 +450,7 @@ def test_sweep_through_gradient(tmp_path):
     names = [(p["payload"]["loras"] or [{"name": None}])[0]["name"] for p in bodies]
     assert names == [None] * 4 + ["a.safetensors"] * 8 + ["b.safetensors"] * 8
     assert all(p["payload"]["width"] == 56 and p["payload"]["quantization"] == "bf16" for p in bodies)
-    assert all(p["group"] == f"artagents-{os.path.basename(run_dir)}" and p["label"].startswith("ArtAgents · LoRA test · g") for p in bodies)
+    assert all(p["group"] == f"ArtAgents · LoRA test · {os.path.basename(run_dir)}" and p["label"].startswith("ArtAgents · LoRA test · g") for p in bodies)
     assert len(os.listdir(run_dir)) == len(jobs) + 1   # Images + run.json
 
 
@@ -566,13 +581,15 @@ def test_lab_sweep_gradient(lab, fake):
                                          "1", True, "vs", "1", None, 0, "g run", "EulerDiscreteScheduler",
                                          "4-bit (bitsandbytes)", "vae-ft-mse", "linear(9,3)"))
     note = events[0][0]
-    assert note.startswith("Note:") and "500×512 will be rounded down" in note and "25 steps" in note
+    assert note.startswith("Note:") and "500×512 will be rounded down" in note
+    assert "28 steps (recommended for flux-dev)" in note and "CFG" not in note        # The CFG override is set
     assert events[-1][0].startswith("Finished: 12 job(s), 0 error(s).")
     bodies = [fake.jobs[i]["body"] for i in fake.order]
     assert len(bodies) == 12
     p = bodies[0]["payload"]
     assert p["width"] == 496 and p["quantization"] == "bnb-4bit" and p["vae_id"] == "vae-ft-mse"
     assert p["scheduler_id"] == "EulerDiscreteScheduler" and p["guidance_scale"] == "linear(9,3)" and p["model_id"] == "flux-dev"
+    assert p["num_inference_steps"] == 28                                             # From the model's defaults
     run = ls.load_run(os.path.join(lab_ui.runs_root(lab), ls.list_runs(lab_ui.runs_root(lab))[0]))
     assert run["workflow"] is None and run["options"]["quantization"] == "bnb-4bit" and run["sampler"] == "EulerDiscreteScheduler"
     assert {(b["payload"]["loras"] or [{"name": None}])[0]["name"] for b in bodies} == {None, "style_e04.safetensors", "/abs/e08.safetensors"}
@@ -590,3 +607,56 @@ def test_lab_stop_gradient(lab, fake):
     job = backend().submit(req(extra={"label": "ArtAgents · LoRA test · x"}))
     message = lab_ui.stop_lab_backend("GRADIENT", lab)
     assert fake.jobs[job]["status"] == "cancelled" and message.startswith("⏹ Stopped.")
+
+
+
+# ---------- model defaults ----------
+
+def test_model_defaults(fake):
+    b = backend()
+    assert b.model_defaults("flux-dev") == {"steps": 28, "guidance_scale": 3.5}
+    assert b.model_defaults("turbo.safetensors") == {"steps": 4, "guidance_scale": 0.0}
+    assert b.model_defaults("tiny-sd") == {} and b.model_defaults("missing") == {} and b.model_defaults(None) == {}
+    calls = fake.local_calls
+    assert b.model_defaults("flux-dev") == {"steps": 28, "guidance_scale": 3.5} and fake.local_calls == calls  # Cached
+
+
+def test_build_payload_with_defaults():
+    d = {"steps": 4, "guidance_scale": 0.0}
+    p = backend().build_payload(req(steps=None, cfg_scale=None), d)
+    assert p["num_inference_steps"] == 4 and p["guidance_scale"] == 0.0
+    p = backend().build_payload(req(steps=9, cfg_scale=2.0), d)                 # The request wins
+    assert p["num_inference_steps"] == 9 and p["guidance_scale"] == 2.0
+    p = backend().build_payload(req(steps=None, cfg_scale=None, extra={"guidance": "linear(9,3)"}), d)
+    assert p["guidance_scale"] == "linear(9,3)" and p["num_inference_steps"] == 4
+
+
+def test_submit_uses_model_defaults_only_when_needed(fake):
+    b = backend()
+    job = b.submit(req(model="turbo.safetensors", steps=None, cfg_scale=None))
+    payload = fake.jobs[job]["body"]["payload"]
+    assert payload["num_inference_steps"] == 4 and payload["guidance_scale"] == 0.0
+    gmod._defaults_cache.clear()
+    calls = fake.local_calls
+    b.submit(req(model="turbo.safetensors", steps=6, cfg_scale=1.0))
+    assert fake.local_calls == calls                                             # Nothing to fill: no lookup
+    job = b.submit(req(model="tiny-sd", steps=None, cfg_scale=None))            # No recommendation: GRADIENT decides
+    payload = fake.jobs[job]["body"]["payload"]
+    assert "num_inference_steps" not in payload and "guidance_scale" not in payload
+
+
+def test_model_defaults_unreachable_is_empty():
+    mock = MagicMock()
+    mock.exceptions = requests.exceptions
+    mock.get.side_effect = requests.exceptions.ConnectionError("down")
+    with patch.object(gmod, "requests", mock):
+        assert backend().model_defaults("flux-dev") == {}
+
+
+def test_lab_defaults_note(fake):
+    b = backend()
+    note = lab_ui.gradient_defaults_note(b, "flux-dev", True, True)
+    assert "28 steps (recommended for flux-dev)" in note and "CFG 3.5 (recommended for flux-dev)" in note
+    assert "turbo" not in note
+    note = lab_ui.gradient_defaults_note(b, "tiny-sd", True, False)
+    assert "25 steps (GRADIENT's default)" in note and "CFG" not in note and "distilled or turbo" in note

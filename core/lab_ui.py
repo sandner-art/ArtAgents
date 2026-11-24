@@ -369,6 +369,23 @@ def gradient_precisions(backend_label, model, settings, token=None):
     return gr.update(choices=[DEFAULT_OPTION] + labels, value=DEFAULT_OPTION)
 
 
+def gradient_defaults_note(backend, model, no_steps, no_cfg) -> str:
+    """What GRADIENT will use for steps/CFG the validation set leaves out."""
+    from .image_gen.gradient import GRADIENT_CFG, GRADIENT_STEPS
+    defaults = backend.model_defaults(model) if hasattr(backend, "model_defaults") else {}
+    parts = []
+    if no_steps:
+        parts.append(f"{defaults['steps']} steps (recommended for {model})" if defaults.get("steps")
+                     else f"{GRADIENT_STEPS} steps (GRADIENT's default)")
+    if no_cfg:
+        parts.append(f"CFG {defaults['guidance_scale']:g} (recommended for {model})"
+                     if defaults.get("guidance_scale") is not None else f"CFG {GRADIENT_CFG:g} (GRADIENT's default)")
+    note = "Not set in the validation set, so GRADIENT uses " + " and ".join(parts) + "."
+    if any("GRADIENT's default" in p for p in parts):
+        note += " Set them in the validation set for distilled or turbo models."
+    return note
+
+
 def _precision_value(backend, model, label):
     """The precision list shows labels; GRADIENT wants the value (e.g. 'bnb-4bit')."""
     if label in (None, "", DEFAULT_OPTION):
@@ -418,9 +435,10 @@ def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras
         odd = sorted({(j.width, j.height) for j in jobs if j.width % 8 or j.height % 8})
         if odd:
             notes.append(f"GRADIENT needs sizes in multiples of 8; {', '.join(f'{w}×{h}' for w, h in odd)} will be rounded down.")
-        if any(not j.steps for j in jobs) or (any(j.cfg is None for j in jobs) and not options.get("guidance")):
-            notes.append("Steps or CFG are not set in the validation set, so GRADIENT uses its defaults (25 steps, "
-                         "CFG 7.5). Set them in the validation set for distilled or turbo models.")
+        no_steps = any(not j.steps for j in jobs)
+        no_cfg = any(j.cfg is None for j in jobs) and not options.get("guidance")
+        if no_steps or no_cfg:
+            notes.append(gradient_defaults_note(backend, model, no_steps, no_cfg))
         if notes:
             yield "Note: " + " ".join(notes), gr.update(), gr.update(), gr.update()
     meta = {"name": run_name or vname, "validation_set": vname, "validation_version": vset["version"],

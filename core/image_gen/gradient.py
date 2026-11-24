@@ -14,8 +14,12 @@ Backend-specific request options (ImageGenRequest.extra):
   quantization, vae_id   GRADIENT's per-render precision and VAE override
   guidance               a CFG schedule string ('linear(9,3)', '9@0,4@20'); overrides cfg_scale
   label, group, tags, origin   how the job appears in GRADIENT's queue and gallery
-                               (group/tags/origin need a GRADIENT that knows them; older
-                               versions ignore unknown fields)
+                               (group, tags and origin need GRADIENT 0.9.1+; older
+                               versions ignore them)
+
+Steps and CFG left unset come from GRADIENT's recommended settings for the model
+(GET /api/v1/models/local), else GRADIENT's own defaults (25 steps, CFG 7.5). GRADIENT
+0.9.1+ reports LoRAs that matched no layer of the model (`loras_skipped`).
 
 Optional API token for a GRADIENT on another machine: ARTAGENTS_GRADIENT_TOKEN or the
 `token` argument (sent as a Bearer token).
@@ -40,6 +44,9 @@ TOKEN_ENV = "ARTAGENTS_GRADIENT_TOKEN"
 API = "/api/v1"
 LABEL_PREFIX = "ArtAgents"
 DONE, FAILED, CANCELLED = "completed", "failed", "cancelled"
+GRADIENT_STEPS, GRADIENT_CFG = 25, 7.5  # What GRADIENT uses when neither the request nor the model says
+DEFAULTS_TTL = 300.0
+_defaults_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 
 
 def round8(value: int) -> int:
@@ -117,11 +124,40 @@ class GradientBackend(ImageBackend):
         return [(o.get("label") or o.get("value"), o.get("value")) for o in (data or {}).get("options", [])
                 if o.get("available") and o.get("value")]
 
+    def model_defaults(self, model: str | None) -> dict:
+        """GRADIENT's recommended settings for a model (steps, guidance_scale, width, height,
+        scheduler; from its model manifest), {} when it has none. Cached for a few minutes."""
+        if not model:
+            return {}
+        key = (self.base_url, model)
+        hit = _defaults_cache.get(key)
+        if hit and time.monotonic() - hit[0] < DEFAULTS_TTL:
+            return dict(hit[1])
+        found: dict = {}
+        for kind in ("diffusers", "checkpoints"):
+            try:
+                data = self._json(self._api("get", "/models/local", params={"type": kind}), "model details")
+            except ImageGenError:
+                continue
+            entry = next((m for m in data or [] if isinstance(m, dict) and m.get("name") == model), None)
+            if entry is not None:
+                found = {k: v for k, v in (entry.get("defaults") or {}).items() if v not in (None, "")}
+                break
+        _defaults_cache[key] = (time.monotonic(), found)
+        return dict(found)
+
+    @staticmethod
+    def _wants_defaults(req: ImageGenRequest) -> bool:
+        guidance = (req.extra or {}).get("guidance")
+        return not req.steps or (req.cfg_scale is None and guidance in (None, ""))
+
     # --- Jobs ------------------------------------------------------------------
-    def build_payload(self, req: ImageGenRequest) -> dict:
+    def build_payload(self, req: ImageGenRequest, defaults: dict | None = None) -> dict:
+        """The text_to_image payload; `defaults` (model_defaults) fill steps and CFG left unset."""
         if not req.model:
             raise ImageGenError("Pick a GRADIENT model first.")
         extra = req.extra or {}
+        defaults = defaults or {}
         payload = {
             "model_id": req.model, "prompt": req.prompt or "", "negative_prompt": req.negative_prompt or "",
             "width": round8(req.width), "height": round8(req.height), "seed": resolve_seed(req.seed),
@@ -130,6 +166,8 @@ class GradientBackend(ImageBackend):
         }
         if req.steps:
             payload["num_inference_steps"] = int(req.steps)
+        elif defaults.get("steps"):
+            payload["num_inference_steps"] = int(defaults["steps"])
         guidance = (extra.get("guidance") or "").strip() if isinstance(extra.get("guidance"), str) else extra.get("guidance")
         if guidance not in (None, ""):
             try:
@@ -138,6 +176,8 @@ class GradientBackend(ImageBackend):
                 payload["guidance_scale"] = guidance  # A schedule: 'linear(9,3)', '9@0,4@20'
         elif req.cfg_scale is not None:
             payload["guidance_scale"] = float(req.cfg_scale)
+        elif defaults.get("guidance_scale") is not None:
+            payload["guidance_scale"] = float(defaults["guidance_scale"])
         if req.sampler:
             payload["scheduler_id"] = req.sampler
         for key in ("quantization", "vae_id"):
@@ -148,7 +188,7 @@ class GradientBackend(ImageBackend):
     def submit(self, req: ImageGenRequest) -> str:
         """Queues one image in GRADIENT; returns the job id."""
         extra = req.extra or {}
-        payload = self.build_payload(req)
+        payload = self.build_payload(req, self.model_defaults(req.model) if self._wants_defaults(req) else None)
         body = {"kind": "text_to_image", "payload": payload, "count": 1, "vary_seed": False,
                 "label": extra.get("label") or f"{LABEL_PREFIX} · {' '.join((req.prompt or '').split())[:48]}"}
         for key in ("group", "tags", "origin"):
