@@ -3,7 +3,10 @@
 import io
 import json
 import os
+from dataclasses import asdict
 from unittest.mock import MagicMock, patch
+
+import numpy as np
 
 import pytest
 import requests
@@ -49,6 +52,8 @@ class FakeGradient:
         self.skipped = skipped or {}       # LoRA name -> reported as not applied
         self.token = token
         self.local_calls = 0
+        self.embeddings = True        # False: an older GRADIENT without /lab/embed
+        self.embed_calls = []
         self.mock = MagicMock()
         self.mock.exceptions = requests.exceptions
         self.mock.get.side_effect = lambda url, **kw: self.route("GET", url, **kw)
@@ -67,6 +72,12 @@ class FakeGradient:
             return FakeResp(200, ["tiny-sd", "flux-dev"])
         if method == "GET" and path == "/system/models/loras":
             return FakeResp(200, ["style_e04.safetensors"])
+        if method == "GET" and path == "/models/local" and (kw.get("params") or {}).get("type") == "vision":
+            if not self.embeddings:
+                return FakeResp(200, [])
+            return FakeResp(200, [{"name": "dinov2-small", "family": "dinov2"}, {"name": "clip-vit-b32", "family": "clip"}])
+        if method == "POST" and path == "/lab/embed":
+            return self.embed(kw["json"])
         if method == "GET" and path == "/models/local":
             kind = (kw.get("params") or {}).get("type")
             self.local_calls += 1
@@ -107,6 +118,27 @@ class FakeGradient:
         if method == "GET" and path.startswith("/history/outputs/") and path.endswith("/image"):
             return FakeResp(200, content=png())
         return FakeResp(404, {"detail": "Not Found"})
+
+    def embed(self, body):
+        """Mean colour → a 4-d unit vector; texts only for the CLIP model."""
+        import base64 as b64mod
+        if not self.embeddings:
+            return FakeResp(404, {"detail": "Not Found"})
+        self.embed_calls.append(body)
+        model = body.get("feature_model")
+        if body.get("texts") and model != "clip-vit-b32":
+            return FakeResp(400, {"detail": "Text embeddings need a CLIP or SigLIP model"})
+        vectors = []
+        for data in body.get("images", []):
+            im = Image.open(io.BytesIO(b64mod.b64decode(data)))
+            assert max(im.size) <= 448
+            r, g, b = [float(c) for c in im.convert("RGB").resize((1, 1)).getpixel((0, 0))]
+            v = [r + 1, g + 1, b + 1, 50.0]
+            n_ = sum(x * x for x in v) ** 0.5
+            vectors.append([x / n_ for x in v])
+        texts = [[1.0, 0.0, 0.0, 0.0] if "red" in t else [0.0, 1.0, 0.0, 0.0] for t in body.get("texts", [])]
+        return FakeResp(200, {"model": model or "dinov2-small", "kind": "clip" if model == "clip-vit-b32" else "dino",
+                              "dim": 4, "image_embeddings": vectors, "text_embeddings": texts or None, "note": None})
 
     def poll(self, job):
         if job["status"] in ("queued", "running"):
@@ -660,3 +692,91 @@ def test_lab_defaults_note(fake):
     assert "turbo" not in note
     note = lab_ui.gradient_defaults_note(b, "tiny-sd", True, False)
     assert "25 steps (GRADIENT's default)" in note and "CFG" not in note and "distilled or turbo" in note
+
+
+
+# ---------- metric scoring through GRADIENT (/lab/embed) ----------
+
+from core.lab import metrics  # noqa: E402
+
+
+def test_gradient_embedder_labels(fake):
+    labels, with_text = metrics.gradient_embedders(backend())
+    assert labels == [metrics.GRADIENT_DEFAULT, "GRADIENT · dinov2-small", "GRADIENT · clip-vit-b32"]
+    assert with_text == ["clip-vit-b32"]
+    fake.mock.get.side_effect = requests.exceptions.ConnectionError("down")
+    assert metrics.gradient_embedders(backend()) == ([], [])
+
+
+def test_gradient_embedder_images_and_texts(fake):
+    images = [Image.new("RGB", (900, 600), (255, 0, 0)), Image.new("RGB", (32, 32), (0, 0, 255))] * 9
+    dino = metrics.make_embedder(metrics.GRADIENT_DEFAULT, backend())
+    vectors = dino.embed_images(images)
+    assert vectors.shape == (18, 4) and np.allclose(vectors[0], vectors[2]) and not np.allclose(vectors[0], vectors[1])
+    assert [len(c["images"]) for c in fake.embed_calls] == [16, 2] and fake.embed_calls[0]["feature_model"] is None
+    assert dino.has_text is False and dino.embed_texts(["x"]) is None
+    clip = metrics.make_embedder("GRADIENT · clip-vit-b32", backend())
+    assert clip.has_text is True
+    texts = clip.embed_texts(["a red fox", "a car"])
+    assert texts.shape == (2, 4) and texts[0][0] == 1.0
+    assert fake.embed_calls[-1]["feature_model"] == "clip-vit-b32"
+
+
+def test_gradient_embedder_errors(fake):
+    with pytest.raises(metrics.MetricsError, match="GRADIENT URL"):
+        metrics.make_embedder(metrics.GRADIENT_DEFAULT, None)
+    with pytest.raises(metrics.MetricsError, match="Not a GRADIENT"):
+        metrics.GradientEmbedder("CLIP ViT-B/32", backend())
+    fake.embeddings = False
+    with pytest.raises(metrics.MetricsError, match="0.9.1 or later"):
+        metrics.make_embedder(metrics.GRADIENT_DEFAULT, backend()).embed_images([Image.new("RGB", (8, 8))])
+    assert isinstance(metrics.make_embedder("DINOv2 small (transformers)"), metrics.Embedder)
+
+
+def _scored_run(tmp_path):
+    jobs = ls.build_jobs(VSET, ["a.safetensors"], [1.0])
+    run_dir = ls.new_run_dir(str(tmp_path / "runs"), "m")
+    results = []
+    for job in jobs:
+        name = f"{job.index}.png"
+        Image.new("RGB", (64, 64), (200, 30, 30) if job.lora else (30, 30, 200)).save(os.path.join(run_dir, name))
+        results.append({"job": job.index, "path": name, "error": None})
+    ls.save_run(run_dir, {"name": "m", "jobs": [asdict(j) for j in jobs], "results": results})
+    train = tmp_path / "train"
+    train.mkdir()
+    for i in range(3):
+        Image.new("RGB", (80, 80), (220, 20, 20)).save(train / f"t{i}.png")
+    return run_dir, [str(train / f"t{i}.png") for i in range(3)]
+
+
+def test_score_run_through_gradient(tmp_path, fake):
+    run_dir, train = _scored_run(tmp_path)
+    clip = metrics.make_embedder("GRADIENT · clip-vit-b32", backend())
+    result = metrics.score_run(ls.load_run(run_dir), run_dir, train, clip)
+    rows = {(r[0], r[1]): r for r in result["rows"]}
+    base, lora = rows[(ls.BASELINE, "held-out")], rows[("a @ 1", "held-out")]
+    assert float(lora[3].split()[0]) > float(base[3].split()[0])      # The red LoRA images are closer to training
+    assert lora[4].startswith("+") and lora[5] != "—"                    # Δ vs baseline, CLIP-T present
+    assert "GRADIENT · clip-vit-b32" in result["summary"]
+    dino = metrics.make_embedder(metrics.GRADIENT_DEFAULT, backend())
+    rows = metrics.score_run(ls.load_run(run_dir), run_dir, train, dino)["rows"]
+    assert all(r[5] == "—" for r in rows)                                 # No text tower: no CLIP-T
+
+
+def test_lab_embedder_choices_and_score(lab, fake, tmp_path):
+    update, note = lab_ui.embedder_choices(lab)
+    assert metrics.GRADIENT_DEFAULT in update["choices"] and "CLIP-T) with: clip-vit-b32" in note
+    update, _ = lab_ui.embedder_choices(lab, None, "GRADIENT · clip-vit-b32")
+    assert update["value"] == "GRADIENT · clip-vit-b32"                    # Keeps the current choice
+    run_dir, train = _scored_run(tmp_path)
+    root = lab_ui.runs_root(lab)
+    os.makedirs(root, exist_ok=True)
+    os.replace(run_dir, os.path.join(root, "scored"))
+    rows, summary = lab_ui.score_run(lab, "scored", os.path.dirname(train[0]), "GRADIENT · clip-vit-b32",
+                                     progress=lambda *a, **k: None)
+    assert rows and summary.startswith("**Scored 8 image(s) with GRADIENT · clip-vit-b32**")
+    saved = json.load(open(os.path.join(root, "scored", "metrics.json"), encoding="utf-8"))
+    assert saved["embedder"] == "GRADIENT · clip-vit-b32"
+    fake.mock.get.side_effect = requests.exceptions.ConnectionError("down")
+    update, note = lab_ui.embedder_choices(lab)
+    assert not any(c.startswith("GRADIENT") for c in update["choices"])

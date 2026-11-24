@@ -117,6 +117,22 @@ class GradientBackend(ImageBackend):
     def list_vaes(self) -> list[str]:
         return list(self._json(self._api("get", "/system/models/vae"), "VAE list") or [])
 
+    def list_vision_models(self) -> list[tuple[str, str | None]]:
+        """[(name, family)] of the vision models in GRADIENT's Models folder (DINO, CLIP, SigLIP)."""
+        data = self._json(self._api("get", "/models/local", params={"type": "vision"}), "vision model list")
+        return [(m["name"], m.get("family")) for m in data or [] if isinstance(m, dict) and m.get("name")]
+
+    def embed(self, images_b64: list[str] | None = None, texts: list[str] | None = None,
+              model: str | None = None) -> dict:
+        """POST /lab/embed (GRADIENT 0.9.1+): L2-normalized image and text embeddings."""
+        body = {"images": list(images_b64 or []), "texts": list(texts or []), "feature_model": model or None}
+        resp = self._api("post", "/lab/embed", json=body, timeout=self.generation_timeout)
+        if resp.status_code in (404, 405):  # ArtAgents sends images, not gallery ids: no such endpoint
+            raise ImageGenError("This GRADIENT can't make embeddings (/lab/embed needs GRADIENT 0.9.1 or later).")
+        if resp.status_code == 400:
+            raise ImageGenError(f"GRADIENT: {response_error_detail(resp)}")
+        return self._json(resp, "embeddings")
+
     def list_precisions(self, model: str | None = None) -> list[tuple[str, str]]:
         """[(label, value)] of precisions that work on this machine (and model)."""
         params = {"model_id": model} if model else None

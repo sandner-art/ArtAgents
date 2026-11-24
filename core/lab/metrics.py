@@ -12,7 +12,8 @@ Every number comes with a bootstrap 95% interval over prompts × seeds; differen
 the interval are noise.
 
 Embedding models are optional: open_clip (pip install open_clip_torch) or DINOv2 via transformers.
-They download weights from Hugging Face on first use and need PyTorch.
+They download weights from Hugging Face on first use and need PyTorch. Or GRADIENT computes them
+(POST /lab/embed, GRADIENT 0.9.1+) with its DINO or CLIP models, so ArtAgents needs no PyTorch.
 """
 from __future__ import annotations
 
@@ -165,6 +166,86 @@ class Embedder:
         import torch
         with torch.no_grad():
             return self._model.encode_text(self._tokenizer(texts)).float().cpu().numpy()
+
+
+GRADIENT_PREFIX = "GRADIENT · "
+GRADIENT_DEFAULT = GRADIENT_PREFIX + "default DINO"
+GRADIENT_MAX_SIDE = 448   # GRADIENT resizes for its models anyway (DINO 448, CLIP 224); keeps uploads small
+GRADIENT_BATCH = 16
+
+
+def gradient_embedders(backend) -> tuple[list[str], list[str]]:
+    """(labels, names of models with a text tower) for a GradientBackend; ([], []) if unreachable."""
+    from ..image_gen import ImageGenError
+    try:
+        models = backend.list_vision_models()
+    except ImageGenError:
+        return [], []
+    text = [name for name, family in models if (family or "").lower() in ("clip", "siglip", "siglip2")]
+    return [GRADIENT_DEFAULT] + [GRADIENT_PREFIX + name for name, _ in models], text
+
+
+class GradientEmbedder:
+    """Embeddings computed by GRADIENT (POST /lab/embed) on its GPU: no PyTorch here."""
+
+    def __init__(self, label: str, backend):
+        if not label.startswith(GRADIENT_PREFIX):
+            raise MetricsError(f"Not a GRADIENT embedder: {label}")
+        self.label = label
+        self.backend = backend
+        self.model = None if label == GRADIENT_DEFAULT else label[len(GRADIENT_PREFIX):]
+        self._has_text: bool | None = None
+
+    def _embed(self, images=None, texts=None) -> dict:
+        from ..image_gen import ImageGenError
+        try:
+            return self.backend.embed(images, texts, self.model)
+        except ImageGenError as e:
+            raise MetricsError(str(e)) from e
+
+    @property
+    def has_text(self) -> bool:
+        """CLIP and SigLIP models embed texts too; DINO doesn't (asked once)."""
+        if self._has_text is None:
+            try:
+                self._has_text = bool(self._embed(texts=["a photo"]).get("text_embeddings"))
+            except MetricsError:
+                self._has_text = False
+        return self._has_text
+
+    @staticmethod
+    def _b64(image) -> str:
+        import base64
+        import io
+        im = image.convert("RGB")
+        im.thumbnail((GRADIENT_MAX_SIDE, GRADIENT_MAX_SIDE))
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+
+    def embed_images(self, images: list, batch: int = GRADIENT_BATCH) -> np.ndarray:
+        out = []
+        for i in range(0, len(images), batch):
+            data = self._embed(images=[self._b64(im) for im in images[i:i + batch]])
+            out.append(np.asarray(data["image_embeddings"], dtype=np.float64))
+        return np.concatenate(out) if out else np.zeros((0, 1))
+
+    def embed_texts(self, texts: list[str]) -> np.ndarray | None:
+        if not self.has_text:
+            return None
+        out = []
+        for i in range(0, len(texts), 64):
+            out.append(np.asarray(self._embed(texts=texts[i:i + 64])["text_embeddings"], dtype=np.float64))
+        return np.concatenate(out)
+
+
+def make_embedder(label: str, gradient_backend=None):
+    """A local Embedder, or GRADIENT's for 'GRADIENT · …' labels."""
+    if label and label.startswith(GRADIENT_PREFIX):
+        if gradient_backend is None:
+            raise MetricsError("Set the GRADIENT URL in App Settings to score with GRADIENT.")
+        return GradientEmbedder(label, gradient_backend)
+    return Embedder(label)
 
 
 def _load_images(paths: list[str]):

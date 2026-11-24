@@ -150,12 +150,14 @@ def create_lora_lab_tab(initial_settings, vision_models, text_models):
                     judge_table = gr.Dataframe(headers=voting.RESULT_HEADERS, interactive=False)
                 with gr.Accordion("Metric scoring (experimental)", open=False):
                     gr.Markdown("Fidelity to the training images, CLIP-T prompt adherence, CMMD drift and leakage vs "
-                                "the baseline, with bootstrap intervals. Metrics are signals, not verdicts: DINO agrees "
+                                "the baseline, with bootstrap intervals. 🔄 adds GRADIENT's models, which run on "
+                                "its GPU (no PyTorch needed here). Metrics are signals, not verdicts: DINO agrees "
                                 "with human preference only weakly (r≈0.32), and aesthetic scores favour photorealism.")
                     embed_note = "" if embedders else "⚠️ " + metrics.install_hint()
                     with gr.Row():
                         m_embedder = gr.Dropdown(embedders, value=embedders[0] if embedders else None,
                                                  label="Embedding model", scale=2)
+                        m_embed_refresh = gr.Button("🔄", scale=0, min_width=50)
                         m_train = gr.Textbox(label="Training image folder", scale=3)
                         m_score = gr.Button("Score run", scale=1)
                     m_note = gr.Markdown(embed_note)
@@ -285,7 +287,9 @@ def wire_lora_lab_tab(c, *, settings_state):
     c["judge_button"].click(fn=lab_ui.iter_judge,
                             inputs=[settings_state, c["m_run"], c["judge_model"], c["judge_criterion"], c["judge_max"]],
                             outputs=[c["judge_status"], c["judge_table"]])
-    c["m_score"].click(fn=lab_ui.score_run, inputs=[settings_state, c["m_run"], c["m_train"], c["m_embedder"]],
+    c["m_embed_refresh"].click(fn=lab_ui.embedder_choices, inputs=[settings_state, c["s_token"], c["m_embedder"]],
+                               outputs=[c["m_embedder"], c["m_note"]])
+    c["m_score"].click(fn=lab_ui.score_run, inputs=[settings_state, c["m_run"], c["m_train"], c["m_embedder"], c["s_token"]],
                        outputs=[c["m_table"], c["m_note"]])
 
     # experiments

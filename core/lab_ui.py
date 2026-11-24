@@ -559,13 +559,26 @@ def show_run(settings, run_name):
 # =====================================================================
 # LoRA Lab: metrics & voting
 # =====================================================================
-def embedder_choices():
+def embedder_choices(settings=None, token=None, current=None):
+    """Local embedding models plus GRADIENT's (when its URL answers). Returns (dropdown, note)."""
     available = metrics.available_embedders()
-    note = "" if available else "⚠️ " + metrics.install_hint()
-    return gr.update(choices=available, value=available[0] if available else None), note
+    notes = []
+    gradient, with_text = [], []
+    if settings is not None:
+        gradient, with_text = metrics.gradient_embedders(_backend("GRADIENT", settings, token))
+    if gradient:
+        notes.append(f"GRADIENT computes embeddings on its GPU ({len(gradient)} model(s)). "
+                     + (f"Prompt adherence (CLIP-T) with: {', '.join(with_text)}." if with_text else
+                        "For prompt adherence (CLIP-T), download CLIP ViT-B/32 in GRADIENT's Models tab."))
+    choices = available + gradient
+    if not choices:
+        notes.append("⚠️ " + metrics.install_hint() + " Or score through GRADIENT (0.9.1+): set its URL in App "
+                     "Settings and press 🔄.")
+    value = current if current in choices else (choices[0] if choices else None)
+    return gr.update(choices=choices, value=value), " ".join(notes)
 
 
-def score_run(settings, run_name, train_folder, embedder_label, progress=gr.Progress()):
+def score_run(settings, run_name, train_folder, embedder_label, token=None, progress=gr.Progress()):
     if not run_name:
         return [], "Pick a test run."
     if not embedder_label:
@@ -576,7 +589,9 @@ def score_run(settings, run_name, train_folder, embedder_label, progress=gr.Prog
              if f.lower().endswith(tuple(IMAGE_EXTENSIONS))] if train_folder and os.path.isdir(train_folder) else []
     try:
         progress(0.1, desc="Loading the embedding model")
-        result = metrics.score_run(lora_sweep.load_run(run_dir), run_dir, train, metrics.Embedder(embedder_label))
+        gradient = _backend("GRADIENT", settings, token) if embedder_label.startswith(metrics.GRADIENT_PREFIX) else None
+        embedder = metrics.make_embedder(embedder_label, gradient)
+        result = metrics.score_run(lora_sweep.load_run(run_dir), run_dir, train, embedder)
     except (metrics.MetricsError, OSError) as e:
         return [], f"⚠️ {e}"
     with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:

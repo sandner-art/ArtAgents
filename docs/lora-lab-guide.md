@@ -102,7 +102,10 @@ changes with the order it is position-biased on that pair and the vote is not co
 voted on first and reports how often it agrees with you; 50% is chance. Trust it only when agreement is high.
 
 **Metric scoring (experimental).** Needs PyTorch plus `open_clip_torch` (CLIP) or `transformers` (DINOv2); models
-download on first use. For each condition and bucket:
+download on first use. Or let **GRADIENT** (0.9.1+) compute the embeddings on its GPU, with nothing extra installed
+here: press 🔄 next to *Embedding model* to add `GRADIENT · <model>` entries for the vision models in its Models
+folder. DINO models give fidelity, leakage and CMMD; a CLIP model (download *CLIP ViT-B/32* in GRADIENT's Models tab)
+adds prompt adherence. The note under the button says which models can do CLIP-T. For each condition and bucket:
 
 - **Fidelity** is the mean cosine similarity to the training images, with a bootstrap 95% interval. DINO agrees with
   human preference only weakly (r ≈ 0.32).
