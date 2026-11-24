@@ -12,6 +12,7 @@ import time
 # Import necessary functions/classes from sibling modules or agents
 from .utils import load_json, get_absolute_path, clean_agent_artifacts # Import cleaner
 from .image_utils import open_image, is_image_filename, to_pil_image
+from .dataset.caption_io import combine, single_line, write_text_atomic, MODE_APPEND, MODE_PREPEND
 from . import history_manager as history
 from agents.roles_config import load_all_roles, get_role_display_name, get_actual_role_name
 from agents.ollama_agent import get_llm_response, stream_llm_response, is_error_response
@@ -94,6 +95,7 @@ def iter_execute_chat_or_team(
     file_agents_dict,
     history_list_state,
     session_history_list_state,
+    ollama_option_overrides: dict | None = None, # e.g. {"temperature": 0, "seed": 42} for captioning
     ):
     """
     Streaming router: runs a team workflow or a single agent / direct model call.
@@ -114,7 +116,8 @@ def iter_execute_chat_or_team(
             yield f"Error: Selected Agent Team '{team_name}' definition not found.", _join_session(session_list), None, session_list, None
             return
         stream = _iter_team(team_name, teams_data_state[team_name], user_input, model_with_vision, single_image_input,
-                            current_settings, models_data_state, file_agents_dict, history_list_state, session_list)
+                            current_settings, models_data_state, file_agents_dict, history_list_state, session_list,
+                            ollama_option_overrides=ollama_option_overrides)
     else:
         if not selected_role_or_team or selected_role_or_team == DIRECT_CALL_LABEL:
             print("Running Direct Model Call (no agent persona).")
@@ -129,6 +132,7 @@ def iter_execute_chat_or_team(
             models_data_state=models_data_state, limiters_data_state=limiters_data_state,
             selected_model_tracker_value=selected_model_tracker_value, file_agents_dict=file_agents_dict,
             history_list_state=history_list_state, session_history_list_state=session_list,
+            ollama_option_overrides=ollama_option_overrides,
         )
 
     for last in stream:
@@ -146,7 +150,8 @@ def iter_execute_chat_or_team(
 
 
 def _iter_team(team_name, team_definition, user_input, model_with_vision, single_image_input,
-               current_settings, models_data_state, file_agents_dict, history_list_state, session_list):
+               current_settings, models_data_state, file_agents_dict, history_list_state, session_list,
+               ollama_option_overrides=None):
     """Runs a team workflow, streaming step output into the response box."""
     session_list = list(session_list)
     print(f"Running Agent Team Workflow: '{team_name}'")
@@ -175,6 +180,7 @@ def _iter_team(team_name, team_definition, user_input, model_with_vision, single
         worker_model_name=worker_model_name,
         single_image_input=image,
         worker_model_has_vision=bool(model_info.get("vision")),
+        ollama_option_overrides=ollama_option_overrides,
     ):
         if isinstance(event, agent_manager.TeamProgress):
             header = f"⏳ Team '{team_name}' · {event.message}"
@@ -218,7 +224,8 @@ def iter_chat_logic(
     # State Inputs
     current_settings, models_data_state, limiters_data_state,
     selected_model_tracker_value, file_agents_dict,
-    history_list_state, session_history_list_state
+    history_list_state, session_history_list_state,
+    ollama_option_overrides: dict | None = None,
     ):
     """
     Single agent (or direct model) call, streaming.
@@ -264,6 +271,7 @@ def iter_chat_logic(
     llm_kwargs = dict(
         role=actual_role_name or "", model=model_name, settings=current_settings, roles_data=roles_data_current,
         max_tokens=effective_max_tokens, system=system_prompt, use_global_options=use_ollama_api_options,
+        ollama_api_options=ollama_option_overrides or None,
     )
 
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -362,19 +370,18 @@ def _iter_folder(folder_path, user_input, file_handling_option, llm_kwargs, entr
 
             if file_handling_option == "Overwrite" or not file_exists:
                 if usable:
-                    with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response)
+                    write_text_atomic(output_file, single_line(img_response, " "))
                     action_taken = "Written" if not file_exists else "Overwritten"
                 else: action_taken = "Skipped (Empty/Error Response)"
             elif file_handling_option == "Append":
                 if usable:
-                    separator = "\n\n---\n\n" if original_content else ""
-                    with open(output_file, 'w', encoding='utf-8') as f: f.write(original_content + separator + img_response)
+                    # Same line, explicit joiner: a new line would become a separate caption in OneTrainer/SimpleTuner
+                    write_text_atomic(output_file, combine(original_content, img_response, MODE_APPEND, " "))
                     action_taken = "Appended"
                 else: action_taken = "Skipped (Empty/Error Response)"
             elif file_handling_option == "Prepend":
                 if usable:
-                    separator = "\n\n---\n\n" if original_content else ""
-                    with open(output_file, 'w', encoding='utf-8') as f: f.write(img_response + separator + original_content)
+                    write_text_atomic(output_file, combine(original_content, img_response, MODE_PREPEND, " "))
                     action_taken = "Prepended"
                 else: action_taken = "Skipped (Empty/Error Response)"
 

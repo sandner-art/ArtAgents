@@ -47,7 +47,7 @@ from ui.team_editor_tab import create_team_editor_tab
 from ui.info_tab import create_info_tab # <-- Add this import
 from ui.history_tab import create_history_tab
 from ui.sweep_tab import create_sweep_tab
-from ui.captions_tab import create_captions_tab
+from ui.captions_tab import create_captions_tab, wire_captions_tab
 from ui.image_gen_tab import create_image_gen_tab
 from ui.common_ui_elements import create_footer
 from core.image_utils import pillow_security_warning
@@ -421,69 +421,13 @@ with gr.Blocks(title="ArtAgents", delete_cache=(3600, 86400)) as demo:
     sweep_comps['sweep_stop_button'].click(fn=None, cancels=[sweep_event])
 
 
-    # -- Captions Tab Wiring --
-    caption_comps['captions_load_button'].click(
-        fn=load_images_and_captions,
-        inputs=[caption_comps['captions_folder_path']],
-        outputs=[ caption_comps['captions_image_gallery'], caption_image_paths_state, caption_data_state, caption_comps['captions_status_display'], caption_selected_item_state, caption_comps['captions_caption_display'], caption_comps['caption_selected_filename_display'], ]
-    )
-    caption_comps['captions_image_gallery'].select(
-        fn=update_caption_display_from_gallery,
-        inputs=[caption_data_state, caption_image_paths_state],
-        outputs=[ caption_comps['captions_caption_display'], caption_selected_item_state, caption_comps['caption_selected_filename_display'], ]
-    )
-    caption_comps['captions_save_button'].click(
-        fn=save_caption,
-        inputs=[ caption_selected_item_state, caption_comps['captions_caption_display'], caption_image_paths_state, caption_data_state ],
-        outputs=[ caption_comps['captions_status_display'], caption_data_state ]
-    )
-    # Batch Append/Prepend (all loaded images or the selected one)
-    batch_inputs = [caption_comps['captions_batch_scope'], caption_selected_item_state, caption_comps['captions_batch_text'], caption_image_paths_state, caption_data_state]
-    batch_outputs = [caption_comps['captions_status_display'], caption_data_state]
-    caption_comps['captions_append_button'].click(
-        fn=lambda scope, sel, text, paths, caps: batch_edit_captions(scope, sel, text, "Append", paths, caps),
-        inputs=batch_inputs, outputs=batch_outputs
-    ).then(
-        fn=lambda selected, captions: (captions or {}).get(selected, "") if selected else "",
-        inputs=[caption_selected_item_state, caption_data_state], outputs=[caption_comps['captions_caption_display']]
-    )
-    caption_comps['captions_prepend_button'].click(
-        fn=lambda scope, sel, text, paths, caps: batch_edit_captions(scope, sel, text, "Prepend", paths, caps),
-        inputs=batch_inputs, outputs=batch_outputs
-    ).then(
-        fn=lambda selected, captions: (captions or {}).get(selected, "") if selected else "",
-        inputs=[caption_selected_item_state, caption_data_state], outputs=[caption_comps['captions_caption_display']]
-    )
-    caption_comps['captions_export_button'].click(
-        fn=export_caption_dataset,
-        inputs=[caption_image_paths_state, caption_data_state, caption_comps['captions_export_format']],
-        outputs=[caption_comps['captions_status_display']]
-    )
-    caption_options = [caption_comps['caption_instruction'], caption_comps['caption_prefix'], caption_comps['caption_suffix']]
-    # Generate Caption for Selected
-    caption_comps['caption_generate_selected_button'].click(
-        fn=generate_captions_for_selected,
-        inputs=[ caption_selected_item_state, caption_comps['caption_agent_selector'], caption_comps['caption_model_selector'], caption_comps['caption_generate_mode'], caption_image_paths_state, caption_data_state, settings_state, models_data_state, limiters_data_state, teams_data_state, chat_comps['loaded_file_agents_state'], history_list_state, session_history_state, ] + caption_options,
-        outputs=[ caption_comps['captions_status_display'], caption_data_state, caption_comps['captions_caption_display'], session_history_state ]
-    )
-    # Generate for All (streams progress; Stop ends the batch between images)
-    caption_all_event = caption_comps['caption_generate_all_button'].click(
-        fn=iter_generate_captions_for_all,
-        inputs=[ caption_image_paths_state, caption_data_state, caption_comps['caption_agent_selector'], caption_comps['caption_model_selector'], caption_comps['caption_generate_mode'], settings_state, models_data_state, limiters_data_state, teams_data_state, chat_comps['loaded_file_agents_state'], history_list_state, session_history_state, ] + caption_options,
-        outputs=[ caption_comps['captions_status_display'], caption_data_state, caption_comps['captions_caption_display'], session_history_state ]
-    )
-    # The batch shows the LAST image's caption; switch back to the selected image's caption,
-    # so "Save THIS Caption" can't write it into the wrong .txt file (also after Stop).
-    sync_selected_caption = lambda selected, captions: (captions or {}).get(selected, "") if selected else ""
-    caption_all_event.then(
-        fn=sync_selected_caption,
-        inputs=[caption_selected_item_state, caption_data_state],
-        outputs=[caption_comps['captions_caption_display']]
-    )
-    caption_comps['caption_stop_button'].click(fn=None, cancels=[caption_all_event]).then(
-        fn=sync_selected_caption,
-        inputs=[caption_selected_item_state, caption_data_state],
-        outputs=[caption_comps['captions_caption_display']]
+    # -- Captions Tab Wiring (all events live in ui/captions_tab.py) --
+    wire_captions_tab(
+        caption_comps, paths_state=caption_image_paths_state, captions_state=caption_data_state,
+        selected_state=caption_selected_item_state, settings_state=settings_state, models_data_state=models_data_state,
+        limiters_data_state=limiters_data_state, teams_data_state=teams_data_state,
+        file_agents_state=chat_comps['loaded_file_agents_state'], history_list_state=history_list_state,
+        session_history_state=session_history_state,
     )
 
 

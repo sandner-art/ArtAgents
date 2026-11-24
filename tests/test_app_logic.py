@@ -49,6 +49,7 @@ OS_PATH_BASENAME_PATH = 'core.app_logic.os.path.basename' # Added for mocking
 OS_PATH_ISFILE_PATH = 'core.app_logic.os.path.isfile' # Added for folder processing fix
 GET_ABSOLUTE_PATH = 'core.app_logic.get_absolute_path' # Used by save_settings
 BUILTINS_OPEN_PATH = 'core.app_logic.open'
+WRITE_ATOMIC_PATH = 'core.app_logic.write_text_atomic' # Caption files are written atomically (temp + os.replace)
 JSON_DUMP_PATH = 'core.app_logic.json.dump' # Used by save_settings
 PIL_IMAGE_FROMARRAY_PATH = 'core.app_logic.Image.fromarray'
 PIL_IMAGE_OPEN_PATH = 'core.app_logic.open_image' # Folder processing opens images via core.image_utils.open_image
@@ -322,6 +323,65 @@ def test_execute_router_without_any_output(mock_time):
         assert app_logic.execute_chat_or_team(*_router_args(ui_role_agent1)) == ("Error: Processing failed.", "", None, [])
 
 
+# --- ollama_option_overrides (reproducible captioning: temperature / seed) ---
+
+OVERRIDES = {"temperature": 0.3, "seed": 43}
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_execute_router_forwards_overrides_to_single_image_call(mock_load_roles, mock_add_history, mock_time):
+    """Captioning path: a PIL image + Direct call reaches stream_llm_response with the overrides."""
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("a red chair")) as mock_stream:
+        response, *_ = app_logic.execute_chat_or_team(
+            *_router_args("(Direct Agent Call)", image=Image.new("RGB", (8, 8))), ollama_option_overrides=dict(OVERRIDES))
+    assert response == "a red chair"
+    kwargs = mock_stream.call_args.kwargs
+    assert kwargs["ollama_api_options"] == OVERRIDES
+    assert len(kwargs["images"]) == 1
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_execute_router_forwards_overrides_to_agent_text_call(mock_load_roles, mock_add_history, mock_time):
+    with patch(STREAM_LLM_PATH, side_effect=stream_returning("answer")) as mock_stream:
+        app_logic.execute_chat_or_team(*_router_args(ui_role_agent1, model=ui_model_text), ollama_option_overrides=dict(OVERRIDES))
+    assert mock_stream.call_args.kwargs["ollama_api_options"] == OVERRIDES
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_execute_router_without_overrides_sends_none(mock_load_roles, mock_add_history, mock_time):
+    """No overrides (or an empty dict) means 'use the configured options', i.e. None, not {}."""
+    for overrides in (None, {}):
+        with patch(STREAM_LLM_PATH, side_effect=stream_returning("answer")) as mock_stream:
+            app_logic.execute_chat_or_team(*_router_args(ui_role_agent1, model=ui_model_text), ollama_option_overrides=overrides)
+        assert mock_stream.call_args.kwargs["ollama_api_options"] is None
+
+
+@patch(ITER_CHAT_LOGIC_PATH)
+def test_execute_router_passes_overrides_to_iter_chat_logic(mock_iter_chat, mock_time):
+    mock_iter_chat.return_value = iter([("out", "", "text-model", [], None)])
+    app_logic.execute_chat_or_team(*_router_args(ui_role_agent1, model=ui_model_text), ollama_option_overrides=dict(OVERRIDES))
+    assert mock_iter_chat.call_args.kwargs["ollama_option_overrides"] == OVERRIDES
+
+
+@patch(ITER_TEAM_WORKFLOW_PATH)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_execute_router_forwards_overrides_to_team_workflow(mock_load_roles, mock_iter_team, mock_time):
+    mock_iter_team.return_value = iter(_team_events())
+    app_logic.execute_chat_or_team(*_router_args(ui_role_team_a), ollama_option_overrides=dict(OVERRIDES))
+    assert mock_iter_team.call_args.kwargs["ollama_option_overrides"] == OVERRIDES
+
+
+@patch(ITER_TEAM_WORKFLOW_PATH)
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+def test_execute_router_team_defaults_to_no_overrides(mock_load_roles, mock_iter_team, mock_time):
+    mock_iter_team.return_value = iter(_team_events())
+    app_logic.execute_chat_or_team(*_router_args(ui_role_team_a))
+    assert mock_iter_team.call_args.kwargs["ollama_option_overrides"] is None
+
+
 # --- Tests for chat_logic (Single Agent Core Logic) ---
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
@@ -468,9 +528,9 @@ def test_chat_logic_accepts_pil_image(mock_get_actual_name, mock_load_roles, moc
 @patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # Simple join mock # FIXED
 @patch(OS_PATH_ISFILE_PATH, return_value=True) # Mock isfile
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
-@patch(BUILTINS_OPEN_PATH, new_callable=mock_open)
+@patch(WRITE_ATOMIC_PATH)
 def test_chat_logic_folder_processing_skip(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_write, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """'Skip' leaves existing .txt files alone; images without a caption file still get one written."""
     mock_load_roles.return_value = mock_roles_data
@@ -501,8 +561,7 @@ def test_chat_logic_folder_processing_skip(
     assert call_kwargs_2['model'] == "vision-model"
     assert call_kwargs_2['images'][0] == mock_pil_image_instance
     assert "Image Context: Analyzing 'img2.jpg'" in call_kwargs_2['prompt']
-    mock_builtin_open.assert_called_once_with(os.sep.join([ui_folder_path, "img2.txt"]), 'w', encoding='utf-8')
-    mock_builtin_open().write.assert_called_once_with("LLM Resp Img2")
+    mock_write.assert_called_once_with(os.sep.join([ui_folder_path, "img2.txt"]), "LLM Resp Img2")
     assert mock_add_history.call_count == 1
     # Removed assert False
 
@@ -579,9 +638,9 @@ def test_chat_logic_limiter(
 @patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
 @patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
-@patch(BUILTINS_OPEN_PATH, new_callable=mock_open)
+@patch(WRITE_ATOMIC_PATH)
 def test_chat_logic_folder_processing_overwrite(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_write, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Overwrite' file handling."""
     mock_load_roles.return_value = mock_roles_data
@@ -593,9 +652,8 @@ def test_chat_logic_folder_processing_overwrite(
     mock_exists.side_effect = [False]
     response1, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Overwrite", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
     assert "img1.png: Written -> img1.txt" in response1 # FIXED
-    mock_builtin_open.assert_called_with(expected_txt_path, 'w', encoding='utf-8')
-    mock_builtin_open().write.assert_called_with("LLM Overwrite Resp")
-    mock_builtin_open.reset_mock()
+    mock_write.assert_called_with(expected_txt_path, "LLM Overwrite Resp")
+    mock_write.reset_mock()
     mock_get_llm.reset_mock()
     mock_exists.reset_mock()
 
@@ -604,8 +662,21 @@ def test_chat_logic_folder_processing_overwrite(
     mock_get_llm.return_value = "LLM Overwrite Resp AGAIN"
     response2, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Overwrite", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
     assert "img1.png: Overwritten -> img1.txt" in response2 # FIXED
-    mock_builtin_open.assert_called_with(expected_txt_path, 'w', encoding='utf-8')
-    mock_builtin_open().write.assert_called_with("LLM Overwrite Resp AGAIN")
+    mock_write.assert_called_with(expected_txt_path, "LLM Overwrite Resp AGAIN")
+
+
+@patch(ADD_TO_HISTORY_PATH, return_value=None)
+@patch(GET_LLM_RESPONSE_PATH, return_value="Line one.\n\n- bullet two")
+@patch(LOAD_ALL_ROLES_PATH, return_value=mock_roles_data)
+@patch(GET_ACTUAL_ROLE_NAME_PATH, side_effect=lambda x: x)
+def test_chat_logic_folder_processing_writes_single_line(mock_get_actual_name, mock_load_roles, mock_get_llm, mock_add_history, mock_time, tmp_path):
+    """Multi-line model output is collapsed to one caption line (a new line would become a separate caption)."""
+    Image.new("RGB", (8, 8)).save(tmp_path / "img1.png")
+    app_logic.chat_logic(str(tmp_path), ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Overwrite",
+                         ui_limiter, None, False, False, mock_settings, mock_models_data, mock_limiters_data,
+                         None, mock_file_agents_dict, mock_history_list, mock_session_history)
+    assert (tmp_path / "img1.txt").read_text(encoding="utf-8") == "Line one. bullet two"
+    assert not [p for p in os.listdir(tmp_path) if p.startswith(".tmp-")]
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
@@ -621,9 +692,10 @@ def test_chat_logic_folder_processing_overwrite(
 @patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
 @patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
+@patch(WRITE_ATOMIC_PATH)
 @patch(BUILTINS_OPEN_PATH, new_callable=mock_open, read_data="Original Content.")
 def test_chat_logic_folder_processing_append(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_builtin_open, mock_write, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Append' file handling."""
     mock_load_roles.return_value = mock_roles_data
@@ -633,11 +705,9 @@ def test_chat_logic_folder_processing_append(
     response, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Append", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
 
     assert "img1.png: Appended -> img1.txt" in response # FIXED
-    assert mock_builtin_open.call_args_list == [
-        call(expected_txt_path, 'r', encoding='utf-8'),
-        call(expected_txt_path, 'w', encoding='utf-8'),
-    ]
-    mock_builtin_open().write.assert_called_once_with("Original Content.\n\n---\n\nLLM Append Resp")
+    assert mock_builtin_open.call_args_list == [call(expected_txt_path, 'r', encoding='utf-8')]
+    # Same line with a space joiner: no '\n\n---\n\n' (trainers would read a new line as another caption)
+    mock_write.assert_called_once_with(expected_txt_path, "Original Content. LLM Append Resp")
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)
@@ -653,9 +723,10 @@ def test_chat_logic_folder_processing_append(
 @patch(OS_PATH_JOIN_PATH, side_effect=lambda *args: os.sep.join(args)) # FIXED
 @patch(OS_PATH_ISFILE_PATH, return_value=True) # ADDED
 @patch(PIL_IMAGE_OPEN_PATH, return_value=MagicMock(spec=Image))
+@patch(WRITE_ATOMIC_PATH)
 @patch(BUILTINS_OPEN_PATH, new_callable=mock_open, read_data="Original Content.") # Mock read for prepend
 def test_chat_logic_folder_processing_prepend(
-    mock_builtin_open, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
+    mock_builtin_open, mock_write, mock_pil_open, mock_isfile, mock_join, mock_basename, mock_splitext, mock_exists, mock_listdir, mock_isdir, # ADDED mocks
     mock_get_actual_name, mock_load_roles, mock_get_llm, mock_release_model, mock_add_history, mock_time):
     """Test chat_logic with folder processing and 'Prepend' file handling."""
     mock_load_roles.return_value = mock_roles_data
@@ -665,17 +736,8 @@ def test_chat_logic_folder_processing_prepend(
     response, _, _, _ = app_logic.chat_logic(ui_folder_path, ui_role_agent1, ui_user_input, ui_model_vision, ui_max_tokens, "Prepend", ui_limiter, None, ui_use_ollama_options, False, mock_settings, mock_models_data, mock_limiters_data, None, mock_file_agents_dict, mock_history_list, mock_session_history)
 
     assert "img1.png: Prepended -> img1.txt" in response # FIXED
-    # Prepend opens for read ('r'), then write ('w')
-    expected_calls = [
-        call(expected_txt_path, 'r', encoding='utf-8'),
-        call(expected_txt_path, 'w', encoding='utf-8')
-    ]
-    mock_builtin_open.assert_has_calls(expected_calls, any_order=True) # Order depends on context manager use
-    # Check the final write call content
-    handle = mock_builtin_open()
-    # Find the write call among potentially multiple calls to the handle
-    write_call = next((c for c in handle.write.call_args_list if c.args[0] == "LLM Prepend Resp\n\n---\n\nOriginal Content."), None)
-    assert write_call is not None
+    mock_builtin_open.assert_called_once_with(expected_txt_path, 'r', encoding='utf-8')
+    mock_write.assert_called_once_with(expected_txt_path, "LLM Prepend Resp Original Content.")
 
 
 @patch(ADD_TO_HISTORY_PATH, return_value=None)

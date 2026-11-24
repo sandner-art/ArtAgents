@@ -63,16 +63,16 @@ This is where you primarily interact with agents and teams.
 
 ### 4.2. Image Captions Tab
 
-View, edit, and generate captions for images in a folder.
+Prepare caption files for LoRA and fine-tune training. The full walkthrough is in
+[captions-guide.md](captions-guide.md).
 
-1.  **Load Folder:** Enter the path to a folder containing images and click "Load Folder". Supported images will appear in the gallery. Existing `.txt` files with the same base name as images are loaded as captions.
-2.  **Select Image:** Click an image in the gallery to view/edit its caption in the text box on the right.
-3.  **Edit/Save:** Manually edit the caption in the text box and click "Save THIS Caption" to save changes to the corresponding `.txt` file.
-4.  **Generate Caption:**
-    *   Select a **Vision Model** and an **Agent/Team** suitable for captioning (e.g., `llava`, `Bespoke Captioner`).
-    *   Choose the **File Handling** mode (Overwrite, Skip, etc.).
-    *   Click **"Generate Caption for SELECTED Image"** to generate and save a caption for the image currently selected in the gallery.
-    *   Click **"Generate Captions for ALL Loaded Images"** to process all images in the loaded folder.
+1.  **Load Folder:** enter a folder of images and click "Load Folder". Each image's `.txt` caption is loaded.
+2.  **Target model / Dataset type / Trigger word / Class noun:** choose what you are training for. These set the caption format (tags or natural language), token budget, trigger prefix and caption rules. The Guidance panel explains each choice with an evidence badge.
+3.  **Select and edit:** click an image to edit its caption; the editor shows the token count for the target model and who wrote the caption. Click "Save THIS Caption" to save.
+4.  **AI Captioning:** pick a Vision Model and Agent/Team (`(Direct Agent Call)` is usually best), then "Generate Caption for SELECTED Image" or "Generate Captions for ALL Loaded Images". Temperature 0 and a fixed seed make captions reproducible; glitches are retried automatically.
+5.  **Tags & Terms:** see how often each tag appears, click one to filter the gallery, and rename, delete or find & replace in bulk.
+6.  **Batch Edit & Export:** append/prepend text on the same line, add caption variants (one per line), normalize old multi-caption files, and export `metadata.jsonl` / `metadata.csv`.
+7.  **Snapshots:** every batch change saves a snapshot first; compare or restore any of them.
 
 ### 4.3. Agent Team Editor Tab
 

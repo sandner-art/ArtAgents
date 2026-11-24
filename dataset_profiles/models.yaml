@@ -1,0 +1,226 @@
+# ArtAgents caption profiles per target model (edit freely: changes apply on the next action;
+# new or renamed profiles appear in the Target model list after a restart).
+#
+# style:          tags | prose        default caption format for this model
+# hybrid:         true if the base model was trained on both (no mismatch warning)
+# budgets:        token limits shown in the editor. tokenizer: clip (exact, offline) | t5 | llm (estimates)
+# word_target:    default length asked from the captioner (words for prose, tags for tags)
+# tag_hint/order: added to the captioning instruction for tag profiles
+# quality_prefix: optional quality/score tags you can add to captions (off by default; an open experiment)
+# notes:          shown in the Guidance panel. evidence: measured | docs | visual-test | anecdotal | inference
+#
+# Sources: see the research report "Training dataset tagging and quality" (Nov 2026).
+
+profiles:
+  - id: sd_sdxl
+    label: "SD 1.5 / SDXL (base & realistic fine-tunes)"
+    style: prose
+    hybrid: true
+    budgets:
+      - {tokenizer: clip, budget: 75, max: 225, label: "CLIP"}
+    word_target: 30
+    max_output_tokens: 120
+    notes:
+      - text: "CLIP reads 75 tokens per chunk. kohya can join up to 3 chunks (max_token_length 75/150/225); anything beyond the configured length is cut off."
+        evidence: docs
+      - text: "Short sentences or comma phrases both work; put the trigger first."
+        evidence: anecdotal
+
+  - id: pony_v6
+    label: "Pony Diffusion V6 (SDXL, booru tags)"
+    style: tags
+    budgets:
+      - {tokenizer: clip, budget: 75, max: 225, label: "CLIP"}
+    word_target: 25
+    max_output_tokens: 160
+    tag_hint: "Use Danbooru/e621-style tags. Include one source tag (source_anime, source_cartoon, source_furry or source_pony) and one rating tag (rating_safe, rating_questionable or rating_explicit)."
+    quality_prefix: "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up"
+    notes:
+      - text: "Pony was trained with the full score string (score_9, score_8_up, …); plain score_9 has a much weaker effect."
+        evidence: docs
+      - text: "Artist names were removed from Pony's training data, so artist tags do not work as style handles."
+        evidence: docs
+
+  - id: illustrious
+    label: "Illustrious-XL (SDXL, booru tags)"
+    style: tags
+    budgets:
+      - {tokenizer: clip, budget: 75, max: 225, label: "CLIP"}
+    word_target: 25
+    max_output_tokens: 160
+    tag_order: "person count (1girl, 1boy, …), character, rating, general tags, artist, quality, year"
+    tag_hint: "Use Danbooru tags."
+    quality_prefix: "masterpiece, best quality"
+    notes:
+      - text: "Tag order used in training: person count, character, rating, general tags, artist, quality, year (adopted from NovelAI)."
+        evidence: docs
+      - text: "Quality ladder: worst / bad / average / good / best quality / masterpiece. Year words: oldest, old, modern, recent, newest. These differ from NoobAI's."
+        evidence: docs
+      - text: "v2.0+ was trained with several captions per image (tags and sentences); writing caption variants matches this."
+        evidence: docs
+      - text: "The author reports that LoRA training on the v-pred versions did not go well; prefer the epsilon versions."
+        evidence: anecdotal
+
+  - id: noobai
+    label: "NoobAI-XL (SDXL, booru tags)"
+    style: tags
+    budgets:
+      - {tokenizer: clip, budget: 75, max: 225, label: "CLIP"}
+    word_target: 25
+    max_output_tokens: 160
+    tag_order: "1girl/1boy/1other, character, series, artists, special tags, general tags, other tags"
+    tag_hint: "Use Danbooru tags. Ratings are safe, sensitive, nsfw or explicit."
+    quality_prefix: "masterpiece, best quality, newest, absurdres, highres"
+    notes:
+      - text: "Quality ladder: masterpiece > best quality > good quality > normal quality > worst quality. Date words: old, early, mid, recent, newest."
+        evidence: docs
+      - text: "NoobAI's tag order template: <1girl/1boy/1other>, <character>, <series>, <artists>, <special tags>, <general tags>, <other tags>."
+        evidence: docs
+
+  - id: anima
+    label: "Anima (2026 anime base, tags + prose)"
+    style: tags
+    hybrid: true
+    budgets:
+      - {tokenizer: llm, budget: null, label: "LLM encoder"}
+    word_target: 25
+    max_output_tokens: 200
+    tag_hint: "Write tags in lowercase with spaces instead of underscores. Prefix artist names with @."
+    underscores: false
+    notes:
+      - text: "Tags use spaces, not underscores; artists are written as @name; optional score_N and 'year YYYY' tags."
+        evidence: docs
+      - text: "Train LoRAs on Anima-Base with the adapter frozen."
+        evidence: docs
+
+  - id: neta_lumina
+    label: "Neta Lumina (Lumina 2 anime fine-tune)"
+    style: tags
+    hybrid: true
+    budgets:
+      - {tokenizer: llm, budget: null, label: "LLM encoder"}
+    word_target: 30
+    max_output_tokens: 200
+    tag_hint: "Use Danbooru tags; prefix artist names with @."
+    notes:
+      - text: "Use tags OR natural language in a caption, not both."
+        evidence: docs
+      - text: "Prompts must start with the system prefix 'You are an assistant designed to generate anime images based on textual prompts. <Prompt Start>'. Check whether your trainer adds it before writing it into captions."
+        evidence: docs
+
+  - id: pony_v7
+    label: "Pony V7 (AuraFlow)"
+    style: prose
+    hybrid: true
+    budgets:
+      - {tokenizer: llm, budget: null, label: "text encoder"}
+    word_target: 50
+    max_output_tokens: 240
+    quality_prefix: "score_9"
+    notes:
+      - text: "Captions combine score_X / style_cluster_X / source_X tags with a natural-language description (written by InternVL2 40B)."
+        evidence: docs
+      - text: "Score tags are weaker than in V6. SimpleTuner is the recommended trainer."
+        evidence: docs
+
+  - id: flux1
+    label: "FLUX.1 [dev] / Chroma (natural language)"
+    style: prose
+    budgets:
+      - {tokenizer: t5, budget: 512, label: "T5 (dev)"}
+    word_target: 60
+    max_output_tokens: 300
+    notes:
+      - text: "T5 sequence length defaults to 512 for dev; schnell cannot exceed 256."
+        evidence: docs
+      - text: "kohya: train FLUX.1-dev LoRAs with --guidance_scale 1.0. Chroma: guidance 0 and the T5 attention mask."
+        evidence: docs
+      - text: "One FLUX test found trigger-only captions won on a very consistent 66-image style set, while captions helped on an inconsistent 114-image set."
+        evidence: visual-test
+
+  - id: flux2
+    label: "FLUX.2 (dev / klein, natural language)"
+    style: prose
+    budgets:
+      - {tokenizer: llm, budget: 512, label: "Mistral Small 3.1"}
+    word_target: 70
+    max_output_tokens: 320
+    notes:
+      - text: "Single Mistral Small 3.1 text encoder, 512 tokens; also understands structured JSON prompts and hex colors."
+        evidence: docs
+      - text: "BFL's klein guide: train on the Base model, describe everything except the concept being learned, and use a made-up trigger word. 20–40 images; the 1,500-step checkpoint was best out of 3,000."
+        evidence: docs
+
+  - id: sd35
+    label: "Stable Diffusion 3.5 (natural language)"
+    style: prose
+    budgets:
+      - {tokenizer: clip, budget: 75, label: "CLIP (pooled)"}
+      - {tokenizer: t5, budget: 256, label: "T5"}
+    word_target: 60
+    max_output_tokens: 300
+    notes:
+      - text: "SD3 was trained on a 50/50 mix of original and synthetic (VLM) captions; GenEval rose from 43.27 to 49.78 versus original captions only."
+        evidence: measured
+
+  - id: qwen_image
+    label: "Qwen-Image (natural language)"
+    style: prose
+    budgets:
+      - {tokenizer: llm, budget: null, label: "Qwen2.5-VL"}
+    word_target: 80
+    max_output_tokens: 360
+    quote_text: true
+    notes:
+      - text: "Base captions are plain prose; visible text is copied verbatim in quotation marks."
+        evidence: docs
+      - text: "Practitioners prefer pronounceable made-up trigger names with a class noun (e.g. 'txcl painting')."
+        evidence: anecdotal
+
+  - id: z_image
+    label: "Z-Image (Base / De-Turbo; prose or tags)"
+    style: prose
+    hybrid: true
+    budgets:
+      - {tokenizer: llm, budget: null, label: "LLM encoder"}
+    word_target: 60
+    max_output_tokens: 300
+    notes:
+      - text: "Trained on five caption types (long, medium, short, tags, simulated user prompts), so either format and several variants per image are in-distribution."
+        evidence: docs
+      - text: "Training a LoRA on Turbo breaks its 8-step speed; train on Base or De-Turbo."
+        evidence: docs
+
+  - id: hidream
+    label: "HiDream-I1 (natural language, short)"
+    style: prose
+    budgets:
+      - {tokenizer: llm, budget: 128, label: "reference max"}
+    word_target: 50
+    max_output_tokens: 200
+    notes:
+      - text: "The reference implementation defaults to 128 tokens; keep captions short."
+        evidence: docs
+
+  - id: wan
+    label: "Wan 2.x (image / video LoRAs)"
+    style: prose
+    budgets:
+      - {tokenizer: t5, budget: 512, label: "umT5"}
+    word_target: 80
+    max_output_tokens: 360
+    include_camera: true
+    notes:
+      - text: "Wan's captions are dense and include camera angle and motion; 512-token text embeddings."
+        evidence: docs
+
+  - id: lumina2
+    label: "Lumina-Image 2.0 (natural language)"
+    style: prose
+    budgets:
+      - {tokenizer: llm, budget: null, label: "Gemma encoder"}
+    word_target: 80
+    max_output_tokens: 360
+    notes:
+      - text: "The Lumina 2 paper found longer captions trained faster (base-model scale)."
+        evidence: measured

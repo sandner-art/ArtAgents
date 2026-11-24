@@ -31,6 +31,7 @@ except ImportError as e:
     pytest.skip(f"Skipping captioning_logic tests, modules not found: {e}", allow_module_level=True)
 
 EXECUTE_PATH = 'core.captioning_logic.execute_chat_or_team'
+DIGEST_PATH = 'core.captioning_logic._model_digest'
 FIXED_PROMPT_START = "Describe this image concisely."
 
 
@@ -62,6 +63,13 @@ def caption_test_folder(tmp_path):
 def _agent_returns(text):
     """Return value of execute_chat_or_team: (response, session_text, model_state, session_list)."""
     return (text, "session text", None, ["previous", "new entry"])
+
+
+@pytest.fixture(autouse=True)
+def _no_ollama_digest():
+    """Provenance asks Ollama for the model digest; keep tests offline and deterministic."""
+    with patch(DIGEST_PATH, return_value="abc123def456") as mock_digest:
+        yield mock_digest
 
 
 COMMON_ARGS = dict(
@@ -258,27 +266,75 @@ def test_save_caption_write_error(mock_file_write, caption_test_folder):
 # --- batch_edit_captions / export_caption_dataset ---
 
 @pytest.mark.parametrize("mode, expected_1, expected_3", [
-    ("Append", "Caption for image 1., ohwx", ", ohwx"),
-    ("Prepend", "ohwx, Caption for image 1.", "ohwx, "),
+    ("Append", "Caption for image 1., ohwx", "ohwx"),
+    ("Prepend", "ohwx, Caption for image 1.", "ohwx"),
 ])
 def test_batch_edit_all_images(caption_test_folder, mode, expected_1, expected_3):
+    """Append/Prepend join on the SAME line with the joiner; never a new line or '---' separator."""
     paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image3.webp")}
     captions = {"image1.png": "Caption for image 1.", "image3.webp": ""}
-    text = ", ohwx" if mode == "Append" else "ohwx, "
-    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, text, mode, paths, captions)
-    assert status == f"{mode}ed text to 2 caption file(s)."
+    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, "ohwx", mode, paths, captions)
+    assert status.startswith(f"{mode}ed text to 2 caption file(s).")
+    assert "Snapshot saved:" in status
     assert updated == {"image1.png": expected_1, "image3.webp": expected_3}
     assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == expected_1
     assert (caption_test_folder / "image3.txt").read_text(encoding="utf-8") == expected_3 # Created for uncaptioned image
     assert captions["image1.png"] == "Caption for image 1." # Input state not mutated
+    assert not [n for n in os.listdir(caption_test_folder) if n.startswith(".tmp-")] # Atomic write left no temp files
+
+
+@pytest.mark.parametrize("mode, text, joiner, expected", [
+    ("Append", "ohwx", " ", "Caption for image 1. ohwx"),
+    ("Append", "ohwx", ". ", "Caption for image 1. ohwx"), # Separator not doubled after the full stop
+    ("Prepend", "ohwx, ", ", ", "ohwx, Caption for image 1."), # Typed separator not doubled
+    ("Append", "ohwx\nsecond line", ", ", "Caption for image 1., ohwx, second line"), # Text kept on one line
+])
+def test_batch_edit_joiner(caption_test_folder, mode, text, joiner, expected):
+    paths = {"image1.png": str(caption_test_folder / "image1.png")}
+    _, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, text, mode, paths, {"image1.png": "Caption for image 1."}, joiner=joiner)
+    assert updated["image1.png"] == expected
+    assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == expected
+
+
+def test_batch_edit_append_text_with_leading_separator(caption_test_folder):
+    """Text typed with its own leading separator (', ohwx') must not produce ' , '."""
+    paths = {"image1.png": str(caption_test_folder / "image1.png")}
+    _, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, ", ohwx", "Append", paths, {"image1.png": "Caption for image 1."})
+    assert updated["image1.png"] == "Caption for image 1., ohwx"
+
+
+def test_batch_edit_variant_mode_adds_line(caption_test_folder):
+    paths = {"image1.png": str(caption_test_folder / "image1.png"), "image3.webp": str(caption_test_folder / "image3.webp")}
+    captions = {"image1.png": "Caption for image 1.", "image3.webp": ""}
+    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, "ohwx painting", "Add as caption variant", paths, captions)
+    assert status.startswith("Added variant text to 2 caption file(s).")
+    assert updated["image1.png"] == "Caption for image 1.\nohwx painting"
+    assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == "Caption for image 1.\nohwx painting"
+    assert updated["image3.webp"] == "ohwx painting"
+    # Adding the same variant again changes nothing
+    status2, updated2 = batch_edit_captions(BATCH_SCOPE_ALL, None, "ohwx painting", "Add as caption variant", paths, updated)
+    assert status2.startswith("Added variant text to 0 caption file(s).")
+    assert updated2 == updated
+
+
+def test_batch_edit_takes_snapshot_before_writing(caption_test_folder):
+    from core.dataset import snapshots
+    paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image3.webp")}
+    batch_edit_captions(BATCH_SCOPE_ALL, None, "ohwx", "Append", paths, {"image1.png": "Caption for image 1.", "image3.webp": ""})
+    snaps = snapshots.list_snapshots(str(caption_test_folder))
+    assert len(snaps) == 1
+    assert snaps[0]["operation"] == "before batch append"
+    stored = snapshots.snapshot_captions(str(caption_test_folder), snaps[0]["id"])
+    assert stored == {"image1.png": "Caption for image 1.", "image3.webp": None} # Pre-edit state, incl. "no caption"
 
 
 def test_batch_edit_selected_only(caption_test_folder):
     paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image2.jpg")}
     captions = {"image1.png": "one", "image2.jpg": "two"}
-    status, updated = batch_edit_captions(BATCH_SCOPE_SELECTED, "image2.jpg", " (tag)", "Append", paths, captions)
-    assert status == "Appended text to 1 caption file(s)."
+    status, updated = batch_edit_captions(BATCH_SCOPE_SELECTED, "image2.jpg", "(tag)", "Append", paths, captions, joiner=" ")
+    assert status.startswith("Appended text to 1 caption file(s).")
     assert updated == {"image1.png": "one", "image2.jpg": "two (tag)"}
+    assert (caption_test_folder / "image2.txt").read_text(encoding="utf-8") == "two (tag)"
     assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == "Caption for image 1." # Untouched
 
 
@@ -298,10 +354,12 @@ def test_batch_edit_validation(scope, selected, text, paths, expected):
 
 def test_batch_edit_reports_write_errors(caption_test_folder):
     paths = {"image1.png": str(caption_test_folder / "image1.png"), "ghost.png": str(caption_test_folder / "nodir" / "ghost.png")}
-    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, "!", "Append", paths, {"image1.png": "c", "ghost.png": "g"})
-    assert status.startswith("Appended text to 1 caption file(s). Errors:")
+    status, updated = batch_edit_captions(BATCH_SCOPE_ALL, None, "tag", "Append", paths, {"image1.png": "c", "ghost.png": "g"})
+    assert status.startswith("Appended text to 1 caption file(s).")
+    assert "Errors:" in status
     assert "ghost.png" in status
-    assert updated == {"image1.png": "c!", "ghost.png": "g"} # Failed file keeps its old caption
+    assert updated == {"image1.png": "c, tag", "ghost.png": "g"} # Failed file keeps its old caption
+    assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == "c, tag"
 
 
 def test_export_caption_dataset_jsonl(caption_test_folder):
@@ -322,13 +380,30 @@ def test_export_caption_dataset_jsonl(caption_test_folder):
 def test_export_caption_dataset_csv(caption_test_folder):
     import csv
     paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image2.jpg")}
-    captions = {"image1.png": "plain", "image2.jpg": "with, comma\nand newline"}
+    captions = {"image1.png": "plain", "image2.jpg": "with, comma \"quoted\""}
     status = export_caption_dataset(paths, captions, "metadata.csv")
     out = caption_test_folder / "metadata.csv"
     assert status == f"Exported 2 caption(s) to {out}."
     with open(out, encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
-    assert rows == [["file_name", "text"], ["image1.png", "plain"], ["image2.jpg", "with, comma\nand newline"]]
+    assert rows == [["file_name", "text"], ["image1.png", "plain"], ["image2.jpg", "with, comma \"quoted\""]]
+
+
+@pytest.mark.parametrize("fmt", ["metadata.jsonl", "metadata.csv"])
+def test_export_caption_dataset_uses_first_variant(caption_test_folder, fmt):
+    """One caption per image in these formats: multi-line files export their first variant and are reported."""
+    import csv, json
+    paths = {n: str(caption_test_folder / n) for n in ("image1.png", "image2.jpg")}
+    captions = {"image1.png": "first variant\nsecond variant", "image2.jpg": "old a\n\n---\n\nold b"}
+    status = export_caption_dataset(paths, captions, fmt)
+    out = caption_test_folder / fmt
+    assert status == f"Exported 2 caption(s) to {out}. 2 image(s) have several caption variants; the first line was exported."
+    if fmt == "metadata.csv":
+        with open(out, encoding="utf-8", newline="") as f:
+            texts = [r[1] for r in list(csv.reader(f))[1:]]
+    else:
+        texts = [json.loads(l)["text"] for l in out.read_text(encoding="utf-8").splitlines()]
+    assert texts == ["first variant", "old a"]
 
 
 def test_export_caption_dataset_errors(tmp_path):
@@ -413,18 +488,22 @@ def test_generate_caption_overwrite_success(mock_execute, caption_test_folder):
 
 
 @pytest.mark.parametrize("mode, expected", [
-    ("Append", "Caption for image 1.\n\n---\n\nNew caption"),
-    ("Prepend", "New caption\n\n---\n\nCaption for image 1."),
+    ("Append", "Caption for image 1. New caption"),
+    ("Prepend", "New caption Caption for image 1."),
+    ("Add as caption variant", "Caption for image 1.\nNew caption"),
 ])
 @patch(EXECUTE_PATH, return_value=_agent_returns("New caption"))
 def test_generate_caption_append_prepend(mock_execute, mode, expected, caption_test_folder):
+    """Default (prose) joiner is a space; Append/Prepend stay on one line, the variant mode adds a line."""
     paths = {"image1.png": str(caption_test_folder / "image1.png")}
-    status, captions, _, _ = generate_captions_for_selected(
+    status, captions, last_caption, _ = generate_captions_for_selected(
         "image1.png", generate_mode=mode, image_paths=paths,
         current_captions={"image1.png": "Caption for image 1."}, **COMMON_ARGS)
     assert "Status: Success." in status
     assert captions["image1.png"] == expected
+    assert last_caption == expected
     assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == expected
+    assert "---" not in expected
 
 
 @patch(EXECUTE_PATH)
@@ -534,3 +613,209 @@ def test_generate_captions_for_all_counts_skipped(mock_execute, tmp_path):
         {}, [], {}, {}, {}, [], [])
 
     assert "Processed=1, Errors=0, Skipped=1" in status
+
+
+# --- generate_captions_for_selected with caption_config (guardrails, retries, provenance) ---
+
+def _generate(folder, filename="image3.webp", mode="Overwrite", captions=None, **kwargs):
+    paths = {filename: str(folder / filename)}
+    return generate_captions_for_selected(filename, generate_mode=mode, image_paths=paths,
+                                          current_captions=captions or {}, **COMMON_ARGS, **kwargs)
+
+
+def _read_provenance(folder, filename):
+    from core.dataset import provenance
+    return provenance.read_provenance(str(folder / filename))
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A cat on a sofa."))
+def test_caption_config_options_reach_the_model(mock_execute, caption_test_folder):
+    _generate(caption_test_folder, caption_config={"temperature": 0.0, "seed": 7, "max_output_tokens": 99})
+    kwargs = mock_execute.call_args.kwargs
+    assert kwargs["ollama_option_overrides"] == {"temperature": 0.0, "seed": 7}
+    assert kwargs["max_tokens_ui"] == 99
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A cat on a sofa."))
+def test_caption_config_negative_seed_means_random(mock_execute, caption_test_folder):
+    _generate(caption_test_folder, caption_config={"seed": -1})
+    assert mock_execute.call_args.kwargs["ollama_option_overrides"] is None # Nothing to override
+
+
+@patch(EXECUTE_PATH, side_effect=[_agent_returns("This image shows a cat."), _agent_returns("A cat on a sofa.")])
+def test_glitch_is_retried_with_new_seed_and_temperature(mock_execute, caption_test_folder):
+    status, captions, last_caption, _ = _generate(
+        caption_test_folder, caption_config={"retries": 2, "temperature": 0.0, "seed": 10})
+    assert "Status: Success." in status
+    assert "Retried 1x" in status
+    assert captions["image3.webp"] == last_caption == "A cat on a sofa."
+    assert mock_execute.call_count == 2
+    first, second = (c.kwargs["ollama_option_overrides"] for c in mock_execute.call_args_list)
+    assert first == {"temperature": 0.0, "seed": 10}
+    assert second["seed"] != 10 and second["seed"] == 11
+    assert second["temperature"] >= 0.3
+    record = _read_provenance(caption_test_folder, "image3.webp")["latest"]
+    assert record["retries"] == 1
+    assert record["options"] == second
+
+
+@patch(EXECUTE_PATH, side_effect=[_agent_returns(""), _agent_returns("I'm sorry, I can't describe this."), _agent_returns("A cat.")])
+def test_retry_without_seed_starts_from_default_seed(mock_execute, caption_test_folder):
+    _generate(caption_test_folder, caption_config={"retries": 2})
+    seeds = [(c.kwargs["ollama_option_overrides"] or {}).get("seed") for c in mock_execute.call_args_list]
+    temps = [(c.kwargs["ollama_option_overrides"] or {}).get("temperature") for c in mock_execute.call_args_list]
+    assert seeds == [None, 43, 44]
+    assert temps[0] is None and all(t >= 0.3 for t in temps[1:])
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("This image shows a cat."))
+def test_retries_exhausted_keeps_caption_and_warns(mock_execute, caption_test_folder):
+    status, captions, _, _ = _generate(caption_test_folder, caption_config={"retries": 1})
+    assert mock_execute.call_count == 2
+    assert "Status: Success." in status
+    assert "Check this caption: meta opener" in status
+    assert captions["image3.webp"] == "This image shows a cat."
+    assert _read_provenance(caption_test_folder, "image3.webp")["latest"]["issues"] == ["meta opener"]
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("This image shows a cat."))
+def test_no_retries_by_default(mock_execute, caption_test_folder):
+    _generate(caption_test_folder)
+    assert mock_execute.call_count == 1
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("1girl, watercolor, Oil_Painting, lake, 1girl"))
+def test_tags_style_removes_omitted_terms(mock_execute, caption_test_folder):
+    _, captions, _, _ = _generate(caption_test_folder, caption_config={
+        "style": "tags", "joiner": ", ", "omit_terms": ["watercolor", "oil painting"]})
+    assert captions["image3.webp"] == "1girl, lake"
+    assert (caption_test_folder / "image3.txt").read_text(encoding="utf-8") == "1girl, lake"
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A watercolor painting of a lake."))
+def test_prose_omitted_terms_flagged_not_removed(mock_execute, caption_test_folder):
+    status, captions, _, _ = _generate(caption_test_folder, caption_config={"omit_terms": ["watercolor"]})
+    assert captions["image3.webp"] == "A watercolor painting of a lake."
+    assert "omitted term used" in status
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A watercolor painting of a lake."))
+def test_prose_strip_omitted_removes_terms(mock_execute, caption_test_folder):
+    _, captions, _, _ = _generate(caption_test_folder, caption_config={"omit_terms": ["watercolor"], "strip_omitted": True})
+    assert captions["image3.webp"] == "A painting of a lake."
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("txcl painting, a lighthouse on a cliff"))
+def test_prefix_not_doubled_when_model_writes_trigger(mock_execute, caption_test_folder):
+    _, captions, _, _ = _generate(caption_test_folder, caption_prefix="txcl painting, ")
+    assert captions["image3.webp"] == "txcl painting, a lighthouse on a cliff"
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("a lighthouse on a cliff"))
+def test_trigger_prefix_does_not_trigger_omitted_term_warning(mock_execute, caption_test_folder):
+    status, captions, _, _ = _generate(caption_test_folder, caption_prefix="txcl illustration, ",
+                                       caption_config={"omit_terms": ["illustration", "watercolor"]})
+    assert captions["image3.webp"] == "txcl illustration, a lighthouse on a cliff"
+    assert "omitted term used" not in status
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("short trigger caption"))
+def test_variant_mode_adds_second_line(mock_execute, caption_test_folder):
+    status, captions, last_caption, _ = _generate(
+        caption_test_folder, filename="image1.png", mode="Add as caption variant",
+        captions={"image1.png": "Caption for image 1."})
+    assert "Added as variant" in status
+    assert captions["image1.png"] == last_caption == "Caption for image 1.\nshort trigger caption"
+    assert (caption_test_folder / "image1.txt").read_text(encoding="utf-8") == "Caption for image 1.\nshort trigger caption"
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("tag one\ntag two"))
+def test_tags_joiner_used_for_append(mock_execute, caption_test_folder):
+    _, captions, _, _ = _generate(caption_test_folder, filename="image1.png", mode="Append",
+                                  captions={"image1.png": "1girl, solo"}, caption_config={"style": "tags", "joiner": ", "})
+    assert captions["image1.png"] == "1girl, solo, tag one, tag two"
+
+
+def test_image_is_downscaled_to_max_side(tmp_path):
+    _make_image(tmp_path / "big.png", size=(2000, 1000))
+    sizes = []
+
+    def _capture(**kwargs):
+        sizes.append(kwargs["single_image_input"].size)
+        return _agent_returns("A wide white image.")
+
+    with patch(EXECUTE_PATH, side_effect=_capture):
+        _generate(tmp_path, filename="big.png", caption_config={"max_image_side": 512})
+        _generate(tmp_path, filename="big.png", caption_config={"max_image_side": 4096}) # Never upscaled
+        _generate(tmp_path, filename="big.png") # No limit
+    assert max(sizes[0]) <= 512 and sizes[0] == (512, 256)
+    assert sizes[1] == (2000, 1000)
+    assert sizes[2] == (2000, 1000)
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A cat on a sofa."))
+def test_provenance_record_written(mock_execute, caption_test_folder, _no_ollama_digest):
+    from core.dataset import provenance
+    from core.version import APP_VERSION
+    _generate(caption_test_folder, caption_instruction="Describe the cat.", caption_prefix="ohwx, ",
+              caption_config={"profile": "sd_sdxl", "preset": "style", "seed": 5, "max_image_side": 768})
+    data = _read_provenance(caption_test_folder, "image3.webp")
+    record = data["latest"]
+    assert data["image"] == "image3.webp"
+    assert record["model"] == "vision-model"
+    assert record["model_digest"] == "abc123def456"
+    assert record["agent"] == "Captioner"
+    assert record["instruction"] == "Describe the cat."
+    assert record["instruction_hash"] == provenance.prompt_hash("Describe the cat.")
+    assert record["options"] == {"seed": 5}
+    assert record["retries"] == 0
+    assert record["profile"] == "sd_sdxl" and record["preset"] == "style"
+    assert record["max_image_side"] == 768
+    assert record["prefix"] == "ohwx, " and record["mode"] == "Overwrite"
+    assert record["caption_hash"] == provenance.text_hash((caption_test_folder / "image3.txt").read_text(encoding="utf-8"))
+    assert record["artagents_version"] == APP_VERSION
+    _no_ollama_digest.assert_called_with({}, "vision-model")
+    # Stored outside the caption files, so trainers never read it
+    assert (caption_test_folder / ".artagents" / "provenance" / "image3.json").is_file()
+    assert not (caption_test_folder / "image3.json").exists()
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns("A cat on a sofa."))
+def test_provenance_write_failure_does_not_fail_caption(mock_execute, caption_test_folder):
+    with patch("core.captioning_logic.provenance.write_provenance", side_effect=OSError("read-only")):
+        status, captions, _, _ = _generate(caption_test_folder)
+    assert "Status: Success." in status
+    assert (caption_test_folder / "image3.txt").read_text(encoding="utf-8") == "A cat on a sofa."
+
+
+@patch(EXECUTE_PATH, return_value=_agent_returns(" ".join(["cat"] * 100) + "."))
+def test_token_budget_warning_in_status(mock_execute, caption_test_folder):
+    status, *_ = _generate(caption_test_folder, caption_config={
+        "budgets": [{"tokenizer": "clip", "budget": 75, "max": 225, "label": "CLIP"}], "max_output_tokens": 1000})
+    assert "Tokens: CLIP: 101/75 (max 225) ⚠️" in status
+
+
+@patch(EXECUTE_PATH, side_effect=[_agent_returns("Cap A"), _agent_returns("Cap B")])
+def test_iter_generate_captions_for_all_snapshots_first(mock_execute, tmp_path):
+    from core.dataset import snapshots
+    for name in ("a.png", "b.png"):
+        _make_image(tmp_path / name)
+    (tmp_path / "a.txt").write_text("old a", encoding="utf-8")
+    paths = {n: str(tmp_path / n) for n in ("a.png", "b.png")}
+    updates = list(iter_generate_captions_for_all(paths, {"a.png": "old a"}, "Captioner", "vision-model (VISION)",
+                                                  "Overwrite", {}, [], {}, {}, {}, [], []))
+    assert "Snapshot saved:" in updates[-1][0]
+    snaps = snapshots.list_snapshots(str(tmp_path))
+    assert len(snaps) == 1 and snaps[0]["operation"] == "before AI captioning (all)"
+    assert snapshots.snapshot_captions(str(tmp_path), snaps[0]["id"]) == {"a.png": "old a", "b.png": None}
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "Cap A"
+
+
+@patch(EXECUTE_PATH, side_effect=[_agent_returns("Cap A"), _agent_returns("Cap B")])
+def test_iter_generate_captions_for_all_passes_caption_config(mock_execute, tmp_path):
+    for name in ("a.png", "b.png"):
+        _make_image(tmp_path / name)
+    paths = {n: str(tmp_path / n) for n in ("a.png", "b.png")}
+    list(iter_generate_captions_for_all(paths, {}, "Captioner", "vision-model (VISION)", "Overwrite",
+                                        {}, [], {}, {}, {}, [], [], caption_config={"seed": 3, "temperature": 0.1}))
+    assert all(c.kwargs["ollama_option_overrides"] == {"temperature": 0.1, "seed": 3} for c in mock_execute.call_args_list)

@@ -14,6 +14,17 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ##  Recent Updates
 
+### v0.11.0-alpha (November 2026): Training Dataset Captions
+
+The Image Captions tab is now a dataset tool for LoRA / fine-tune training. See [docs/captions-guide.md](docs/captions-guide.md).
+
+*   **Target model profiles** for SD 1.5/SDXL, Pony, Illustrious, NoobAI, Anima, FLUX.1/FLUX.2, SD 3.5, Qwen-Image, Z-Image, HiDream, Wan, Lumina and more: caption format (booru tags or natural language), tag order, quality tags and token budget. **Dataset-type presets** (style, concept, character, object, pose, multi-concept) set the trigger prefix and what the captioner must leave out. A Guidance panel explains each choice with an evidence badge (measured, docs, image test, practitioner advice). Both are editable YAML in `dataset_profiles/`.
+*   **Exact CLIP token counts** (offline) and T5/LLM estimates for the selected caption.
+*   **Reproducible AI captions:** temperature and seed control, image downscaling, automatic retry on glitches (refusals, "This image shows…", repetition, cut-off text), cleanup, and a per-image provenance record (model, digest, instruction, settings).
+*   **Tags & Terms:** tag frequency table with over-representation warnings, click-to-filter, bulk rename / delete / find & replace.
+*   **Safe batch edits:** append/prepend stay on one line; "Add as caption variant" adds a line (OneTrainer/SimpleTuner caption variants); normalize old multi-caption files.
+*   **Snapshots:** every batch change is snapshotted first (in the dataset's hidden `.artagents` folder); compare and restore at any time.
+
 ### v0.10.0-alpha (October 2026): Image Generation, Live Streaming, Modern Ollama API
 
 *   **Image Generation tab:** generate images from your prompts with **ComfyUI** (any workflow exported in API format, see `image_workflows/README.md`), **Forge / AUTOMATIC1111 / SD.Next** (`--api`), or **Ollama image models** (experimental: Ollama removed image generation in v0.32.6, so this backend shows a clear message until it returns). Images are saved as PNG with the prompt and settings embedded, plus an optional `.txt` with the prompt. Use **🎨 Send to Image Generation** in the Chat tab to turn an answer into an image.
@@ -64,7 +75,7 @@ Three new teams have been added to `agent_teams.json` to leverage these strategi
 *   **Team Editor:** Create, edit, save, and delete Agent Teams via a dedicated UI tab.
 *   **Chat Interface:** Main tab for direct interaction with selected agents or teams, including session history and response refinement.
 *   **Multimodal Input:** Supports single image upload or processing images within a specified folder for chat or captioning context.
-*   **Image Captioning:** Dedicated tab to load images from a folder, view/edit associated `.txt` caption files, save changes, and generate captions using selected agents/teams and vision models.
+*   **Training Captions:** load an image folder, edit `.txt` captions, and generate them with vision models using target-model profiles and dataset-type presets; token counts, tag statistics, bulk edits, snapshots with restore, provenance, and `metadata.jsonl` / `metadata.csv` export.
 *   **Experiment Sweeps:** Systematically run base prompts across multiple selected Agent Teams and Worker Models. Saves detailed JSON protocol files for each run and separate `.txt` files containing the raw generated prompts per model.
 *   **Configuration Management:** External JSON files for easy customization of settings, models, limiters, API profiles, agent roles, and agent teams.
 *   **App Settings UI:** Dedicated tab to configure Ollama URL, agent loading preferences, default behaviors, UI theme, and detailed Ollama API parameters (with loadable profiles).
@@ -87,6 +98,7 @@ ArtAgent/
 ├── limiters.json           # Prompt style limiters (name, tokens, format string)
 ├── ollama_profiles.json    # Presets for Ollama API options
 ├── agent_teams.json        # Stores PREDEFINED & USER-SAVED Agent Team/Workflow definitions
+├── dataset_profiles/       # Caption profiles per target model + dataset-type presets (YAML)
 │
 ├── agents/                 # --- Agent Logic & Definitions ---
 │   ├── __init__.py
@@ -103,6 +115,8 @@ ArtAgent/
 │   ├── refinement_logic.py # Logic for comment/refinement feature
 │   ├── agent_manager.py    # Orchestrates Agent Team Workflows
 │   ├── captioning_logic.py # Logic for caption editing & generation
+│   ├── dataset_ui.py       # Captions tab callbacks (profiles, terms, snapshots)
+│   ├── dataset/            # Caption files, CLIP tokenizer, guardrails, snapshots, provenance
 │   ├── history_manager.py  # Loads/saves persistent history
 │   ├── ollama_checker.py   # Ollama startup check logic
 │   ├── ollama_manager.py   # Ollama model release logic

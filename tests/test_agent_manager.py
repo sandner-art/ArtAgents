@@ -266,3 +266,55 @@ def test_load_agent_teams():
         assert load_agent_teams() == {"T": TEAM_CONCAT}
     with patch('core.agent_manager.load_json', return_value=[]):
         assert load_agent_teams() == {}
+
+
+# --- ollama_option_overrides (temperature / seed for reproducible captioning) ---
+
+OVERRIDES = {"temperature": 0.3, "seed": 43, "num_predict": 64}
+
+
+def test_overrides_reach_every_step_stream_call():
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream:
+        run(TEAM_CONCAT, ollama_option_overrides=dict(OVERRIDES))
+    assert mock_stream.call_count == 2
+    assert all(c.kwargs["ollama_api_options"] == OVERRIDES for c in mock_stream.call_args_list)
+
+
+def test_no_overrides_send_none_to_steps():
+    for overrides in (None, {}):
+        with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream:
+            run(TEAM_CONCAT, ollama_option_overrides=overrides)
+        assert all(c.kwargs["ollama_api_options"] is None for c in mock_stream.call_args_list)
+
+
+@pytest.mark.parametrize("strategy, n_calls", [
+    ("summarize_all", 1), ("metaphorical_synthesis", 2), ("stylistic_mashup", 2), ("conceptual_blend", 1),
+])
+def test_assembly_calls_get_overrides_without_num_predict(strategy, n_calls):
+    """Assembly calls keep their own token limits: num_predict is dropped, temperature/seed are kept."""
+    team = dict(TEAM_CONCAT, assembly_strategy=strategy)
+    answers = ['"a lighthouse"', "Final"][-n_calls:]
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")) as mock_stream, \
+         patch(GET_LLM_RESPONSE_PATH, side_effect=answers) as mock_get:
+        final, _, _ = run(team, ollama_option_overrides=dict(OVERRIDES))
+    assert final == "Final"
+    assert mock_get.call_count == n_calls
+    for c in mock_get.call_args_list:
+        assert c.kwargs["ollama_api_options"] == {"temperature": 0.3, "seed": 43}
+    assert mock_stream.call_args_list[0].kwargs["ollama_api_options"] == OVERRIDES # Steps keep num_predict
+
+
+def test_assembly_overrides_none_when_only_num_predict_given():
+    team = dict(TEAM_CONCAT, assembly_strategy="summarize_all")
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")), \
+         patch(GET_LLM_RESPONSE_PATH, return_value="Summary") as mock_get:
+        run(team, ollama_option_overrides={"num_predict": 64})
+    assert mock_get.call_args.kwargs["ollama_api_options"] is None
+
+
+def test_overrides_input_is_not_mutated():
+    overrides = dict(OVERRIDES)
+    team = dict(TEAM_CONCAT, assembly_strategy="summarize_all")
+    with patch(STREAM_PATH, side_effect=streaming("A", "B")), patch(GET_LLM_RESPONSE_PATH, return_value="S"):
+        run(team, ollama_option_overrides=overrides)
+    assert overrides == OVERRIDES

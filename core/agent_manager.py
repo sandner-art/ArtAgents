@@ -48,6 +48,7 @@ def iter_team_workflow(
     single_image_input = None, # Add image input parameter (default to None)
     return_intermediate_steps: bool = False, # Argument to control return value
     worker_model_has_vision: bool | None = None, # Whether the worker model accepts images
+    ollama_option_overrides: dict | None = None, # e.g. temperature/seed for reproducible captioning
     ) -> Iterator["TeamProgress | TeamResult"]:
     """
     Executes a defined agent team workflow, yielding TeamProgress updates while
@@ -72,6 +73,9 @@ def iter_team_workflow(
             - dict | None: Dictionary of intermediate step outputs if requested, else None.
                            Format: {step_index: {"role": ..., "goal": ..., "output": ..., "error": ...}}
     """
+    # Step calls get all overrides; assembly calls keep their own token limits
+    step_overrides = dict(ollama_option_overrides or {})
+    assembly_overrides = {k: v for k, v in step_overrides.items() if k != "num_predict"} or None
     print(f"\n--- Running Agent Team Workflow: {team_name} ---")
     if not team_definition or not isinstance(team_definition.get("steps"), list):
         msg = "Error: Invalid team definition provided (must be dict with a 'steps' list)."
@@ -159,6 +163,7 @@ def iter_team_workflow(
             roles_data=all_roles_data, # Pass full roles data for option merging
             images=images_for_step, # Pass image list if applicable for this step
             max_tokens=step_max_tokens,
+            ollama_api_options=step_overrides or None,
         ):
             yield TeamProgress(step_idx, len(steps), step_role, step_output_text, f"Step {step_idx}/{len(steps)}: {step_role}")
 
@@ -260,6 +265,7 @@ def iter_team_workflow(
              summary_max_tokens = initial_settings.get("summary_step_max_tokens", 1024)
 
              final_output = get_llm_response(
+                  ollama_api_options=assembly_overrides,
                   role=summarizer_role,
                   prompt=summarizer_prompt,
                   model=worker_model_name,
@@ -292,6 +298,7 @@ def iter_team_workflow(
                 "The metaphor should be unusual and visually evocative. Respond with ONLY the metaphor itself, without quotation marks."
             )
             dynamic_metaphor = get_llm_response(
+                ollama_api_options=assembly_overrides,
                 role="Metaphor Extractor", prompt=extraction_prompt, model=worker_model_name,
                 settings=initial_settings, roles_data=all_roles_data, max_tokens=50 # Small token limit for the metaphor
             ).strip().strip('\"')
@@ -306,6 +313,7 @@ def iter_team_workflow(
                  f"Describe the scene or object as an interpretation of this metaphor."
             )
             final_output = get_llm_response(
+                  ollama_api_options=assembly_overrides,
                   role="Metaphorical Synthesizer", prompt=synthesis_prompt, model=worker_model_name,
                   settings=initial_settings, roles_data=all_roles_data, max_tokens=1024
             )
@@ -324,6 +332,7 @@ def iter_team_workflow(
                  "Generate a detailed visual prompt for this new hybrid concept."
              )
              final_output = get_llm_response(
+                  ollama_api_options=assembly_overrides,
                   role="Concept Blender", prompt=synthesis_prompt, model=worker_model_name,
                   settings=initial_settings, roles_data=all_roles_data, max_tokens=1024
              )
@@ -343,6 +352,7 @@ def iter_team_workflow(
                 "Respond with ONLY the name of the style (e.g., '1920s newspaper report', 'a pirate's sea shanty', 'Python code comments')."
             )
             dynamic_style = get_llm_response(
+                ollama_api_options=assembly_overrides,
                 role="Style Extractor", prompt=extraction_prompt, model=worker_model_name,
                 settings=initial_settings, roles_data=all_roles_data, max_tokens=50
             ).strip().strip('\"')
@@ -356,6 +366,7 @@ def iter_team_workflow(
                  f"However, you MUST write the entire final text in the literary style of '{dynamic_style}'."
             )
             final_output = get_llm_response(
+                  ollama_api_options=assembly_overrides,
                   role="Stylizer Agent", prompt=synthesis_prompt, model=worker_model_name,
                   settings=initial_settings, roles_data=all_roles_data, max_tokens=1024
             )

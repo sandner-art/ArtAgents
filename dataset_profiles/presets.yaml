@@ -1,0 +1,123 @@
+# ArtAgents dataset-type presets (edit freely: changes apply on the next action;
+# new or renamed presets appear in the Dataset type list after a restart).
+#
+# The core rule behind all presets: text explains away variance. Whatever a caption
+# names is attributed to that word; whatever is constant and unnamed is absorbed by
+# the trigger. So caption what should stay changeable, and leave the thing you are
+# teaching to the trigger (+ a class noun).
+#
+# prefix:          trigger prefix template; {trigger} and {class} are filled in
+# instruction:     added to the captioning instruction ({class} is filled in)
+# omit_terms:      words the captioner is told to avoid; tags with these names are removed,
+#                  in prose they are flagged
+# options:         captioning checkboxes switched on by this preset
+# guidance:        shown in the Guidance panel. evidence: measured | docs | visual-test | anecdotal | inference
+
+presets:
+  - id: general
+    label: "General / no preset"
+    prefix: "{trigger}"
+    instruction: ""
+    omit_terms: []
+    options: [visible, no_meta]
+    guidance:
+      - text: "Pick a dataset type for tailored captioning rules."
+        evidence: inference
+
+  - id: style
+    label: "Style (painting, illustration, photo look)"
+    prefix: "{trigger} {class}"
+    class_examples: "painting, illustration, photo, artwork"
+    instruction: "Describe only the content: subjects, objects, actions, composition and setting."
+    omit_terms: [style, art style, watercolor, oil painting, acrylic, gouache, illustration, illustrated, drawing, sketch, digital art, digital painting, anime style, cartoon, cel shading, brushstrokes, brush strokes, painterly, impasto, cinematic, bokeh, film grain, concept art, 3d render, artstation]
+    options: [visible, no_meta, no_style, no_judgement]
+    images: "15–40 images (BFL's FLUX.2 klein guide: 20–40)"
+    guidance:
+      - text: "Caption the content, never the look: every style word you write gets credited to that word instead of your trigger."
+        evidence: docs
+      - text: "Use a unique trigger plus a medium noun, e.g. 'txcl painting'. On FLUX/Qwen some style LoRAs work without a trigger when the style should always be on."
+        evidence: anecdotal
+      - text: "fal's trick: add a second, trigger-only short caption per image (use 'Add as caption variant'), because long content captions weakened the trigger."
+        evidence: visual-test
+      - text: "Remove images that don't match the style; a few outliers dilute it."
+        evidence: anecdotal
+      - text: "Horizontal flip is usually fine for style datasets."
+        evidence: anecdotal
+
+  - id: concept
+    label: "Concept / effect (lighting, material, technique)"
+    prefix: "{trigger}"
+    class_examples: "the fixed phrase for your effect, e.g. 'glass skin effect'"
+    instruction: "Describe everything in the scene. Refer to the special effect only as '{class}' and do not describe it with other words."
+    omit_terms: []
+    options: [visible, no_meta, no_judgement]
+    images: "several different subjects/carriers showing the effect"
+    guidance:
+      - text: "Use one fixed phrase for the effect everywhere; synonyms split what the model learns."
+        evidence: anecdotal
+      - text: "Trigger-only captions made a concept LoRA faded and messy in one FLUX test ('clown makeup'); caption the scene around the effect."
+        evidence: visual-test
+      - text: "Show the effect on many different subjects so it doesn't bind to one of them."
+        evidence: inference
+
+  - id: character
+    label: "Character / person"
+    prefix: "{trigger} {class}"
+    class_examples: "woman, man, girl, boy, character"
+    instruction: "Refer to the main subject only as 'the {class}'. Do not describe permanent identity features (face, eye color, skin tone, body shape). Do describe clothing, hairstyle when it varies, pose, expression, framing, camera angle, background and lighting."
+    omit_terms: [beautiful, pretty, gorgeous, attractive, handsome]
+    options: [visible, no_meta, no_judgement, camera]
+    images: "15–30 varied images (DreamBooth used 3–5 for full fine-tuning)"
+    guidance:
+      - text: "DreamBooth measured that the class noun matters: identity score 0.744 with the right class noun, 0.454 with a wrong one, 0.303 without one."
+        evidence: measured
+      - text: "Leave out constant identity traits (they should be absorbed by the trigger); caption what changes: outfit, hairstyle, pose, background, lighting."
+        evidence: anecdotal
+      - text: "If one outfit or background appears in more than half the images, caption it or add variety, or it binds to the trigger. The Tags & Terms panel flags such terms."
+        evidence: inference
+      - text: "Turn horizontal flip off for asymmetric subjects (hair parting, scars, logos)."
+        evidence: anecdotal
+
+  - id: object
+    label: "Object / product"
+    prefix: "{trigger} {class}"
+    class_examples: "a specific class noun: sneaker, teapot, handbag, chair"
+    instruction: "Refer to the main object only as 'the {class}'. Do not describe its fixed design (shape, logo, brand, printed text, color scheme). Describe the surface it stands on, the background, props, hands, viewing angle and lighting."
+    omit_terms: []
+    options: [visible, no_meta, no_judgement, camera, lighting]
+    images: "10–30 images from many angles and settings"
+    guidance:
+      - text: "Use a specific class noun ('sneaker', not 'object'); the class noun anchors what the model already knows."
+        evidence: measured
+      - text: "Turn horizontal flip off for logos and printed text."
+        evidence: inference
+      - text: "Cover many viewing angles; missing angles are hard for the LoRA to invent."
+        evidence: anecdotal
+
+  - id: function
+    label: "Pose / composition / camera angle"
+    prefix: "{trigger}"
+    class_examples: "the pose or composition name, e.g. 'over-the-shoulder shot'"
+    instruction: "Describe the subjects, clothing, setting and style in detail. Describe the pose or composition only as '{class}'."
+    omit_terms: []
+    options: [visible, no_meta, no_judgement]
+    images: "varied subjects, styles and settings sharing the same pose/composition"
+    guidance:
+      - text: "No published guidance was found for pose/composition LoRAs; vary everything except the function so it is the only constant."
+        evidence: inference
+
+  - id: multi_concept
+    label: "Multi-concept (several triggers)"
+    prefix: "{trigger}"
+    class_examples: "one class noun per concept"
+    instruction: "Describe the scene; refer to each known subject by its given name only."
+    omit_terms: []
+    options: [visible, no_meta, no_judgement]
+    images: "balanced exposure per concept; show each concept alone before group shots"
+    guidance:
+      - text: "One unique trigger per concept, with no near-identical triggers."
+        evidence: anecdotal
+      - text: "Concepts bleed into each other (reported on Qwen-Image); test each trigger alone and combined after training."
+        evidence: anecdotal
+      - text: "When shuffling tags, protect the triggers with keep_tokens (or kohya's ||| separator)."
+        evidence: docs
