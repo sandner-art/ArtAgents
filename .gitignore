@@ -172,3 +172,5 @@ history.json
 
 # Generated images
 /outputs
+/experiments
+/validation_sets

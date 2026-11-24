@@ -163,7 +163,45 @@ phrasings** adds alternative wordings as extra lines (BFL suggests 5–10 phrasi
 (`control_path`), musubi-tuner (TOML or JSONL with `control_path` / `control_path_N`) or fal (zip of `_start` / `_end`
 pairs).
 
-## 9. Snapshots and undo
+## 9. Caption Sets
+
+Caption sets are alternative captions for the same images, for caption A/B tests. `img.txt` is the active set
+(what trainers read by default); each other set is `img.<set>.txt`. kohya-ss and musubi-tuner can train on a set
+directly with `caption_extension = ".<set>.txt"`.
+
+- **Save active captions as a new set** copies the current captions, e.g. before you experiment.
+- **Make the selected set active** copies a set over `img.txt` (a snapshot is saved first).
+- **Move the selected set out** moves its files to `.artagents/deleted_sets` (nothing is deleted).
+- **Compare all sets** shows per set: captions, average and maximum tokens, share over the token budget, average
+  words, trigger coverage, distinct terms, files with several lines, and verifier disputes (when the verifier
+  checked exactly that text). Selecting a set shows its length histogram.
+
+**Caption Sweep** makes one set per strategy with the AI Captioning settings, without touching your active captions:
+
+| Strategy | What it makes |
+|---|---|
+| Trigger only | just the trigger (no description) |
+| Tags | tags from the tagger (if the caption source uses it) or the vision model |
+| Short / long prose | ~15 / ~60-word natural-language captions |
+| Structured fields | captions assembled from structured fields |
+| Random-length mix | per image, randomly short, long or trigger only (random-length captions did best in Brack et al. 2025) |
+| Long + trigger-only line | long caption plus a trigger-only variant line (fal's trick) |
+| 95% / 5% blend | model captions with ~5% of your current captions kept (DALL-E 3 kept 5% original captions) |
+| Quality tags on | your current captions with the profile's quality tags after the trigger |
+
+Sets record how they were made in `.artagents/caption_sets.json`; the LoRA Lab's experiment records pick this up.
+
+**Write a training copy** writes the selected set, with the images hard-linked (or copied), into
+`.artagents/export/<set>-<mode>/`:
+
+- one caption per line, for SimpleTuner and OneTrainer;
+- kohya's `---===---` separators, with `enable_multiline_caption = true`;
+- duplicated images with one caption each, for kohya with cached text-encoder outputs (which ignores random line
+  selection) and for trainers whose multi-caption support is unverified.
+
+Then train one LoRA per set and compare them in the **LoRA Lab** tab (see `lora-lab-guide.md`).
+
+## 10. Snapshots and undo
 
 Every batch change (AI batch, bulk edit, append/prepend, normalize, restore) first saves a snapshot
 of all caption files. In **Snapshots** you can **Compare with current** (a diff per file) or

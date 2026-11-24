@@ -4,6 +4,8 @@ import gradio as gr
 
 from core import dataset_tools_ui as dtu
 from core import dataset_ui as dui
+from core import lab_ui
+from core.lab import caption_sets as cs
 from core.captioning_logic import BATCH_SCOPE_ALL, BATCH_SCOPE_SELECTED, save_caption, export_caption_dataset
 from core.dataset import caption_io, profiles, structured, tagger, terms, trainer_export
 
@@ -328,6 +330,41 @@ def create_captions_tab(initial_agent_team_choices, initial_vision_models):
                 pair_export_code = gr.Code(value="", label="Export", interactive=False)
                 pair_export_file = gr.File(label="Exported file", interactive=False)
 
+            # ---- Caption sets ----
+            with gr.Tab("Caption Sets"):
+                gr.Markdown("Alternative captions for the same images, for caption A/B tests. `img.txt` is the active "
+                            "set; each other set is `img.<set>.txt`. kohya-ss and musubi-tuner can train on a set with "
+                            "`caption_extension = \".<set>.txt\"`.")
+                with gr.Row():
+                    set_dropdown = gr.Dropdown([cs.ACTIVE], value=cs.ACTIVE, label="Caption set", scale=3, elem_id="set_dropdown")
+                    set_refresh_button = gr.Button("🔄", scale=0, min_width=50)
+                    set_name = gr.Textbox(label="New set name", placeholder="e.g. short-prose", scale=2)
+                    set_description = gr.Textbox(label="Description (optional)", scale=3)
+                with gr.Row():
+                    set_save_button = gr.Button("Save active captions as a new set")
+                    set_activate_button = gr.Button("Make the selected set active (snapshot first)")
+                    set_delete_button = gr.Button("Move the selected set out (not deleted)")
+                with gr.Row():
+                    set_compare_button = gr.Button("Compare all sets", variant="primary", scale=1)
+                    set_variant_mode = gr.Dropdown(list(cs.VARIANT_MODES.values()), value=cs.VARIANT_MODES["lines"],
+                                                   label="Caption variants for training", scale=3)
+                    set_materialize_button = gr.Button("Write a training copy of the selected set", scale=2)
+                set_compare_md = gr.Markdown("")
+                set_compare_table = gr.Dataframe(headers=cs.STAT_HEADERS, interactive=False, wrap=True, elem_id="set_table")
+                set_histogram = gr.Dataframe(headers=["CLIP tokens", "Captions"], interactive=False, label="Length histogram (selected set)")
+                gr.Markdown("**Caption Sweep**: one new set per strategy, made with the AI Captioning settings "
+                            "(model, profile, trigger). Your active captions are not changed. Experimental by design: "
+                            "these strategies are open questions, which is why they are worth testing.")
+                with gr.Row():
+                    sweep_strategies = gr.CheckboxGroup([v[0] for v in cs.STRATEGIES.values()],
+                                                        value=[cs.STRATEGIES["short_prose"][0], cs.STRATEGIES["long_prose"][0]],
+                                                        label="Strategies", scale=4)
+                    sweep_prefix = gr.Textbox(label="Set name prefix", value="sweep", scale=1)
+                with gr.Row():
+                    sweep_run_button = gr.Button("Run Caption Sweep", variant="primary")
+                    sweep_stop_button = gr.Button("⏹ Stop", variant="stop")
+                sweep_status_md = gr.Markdown("")
+
             # ---- Snapshots ----
             with gr.Tab("Snapshots"):
                 gr.Markdown("A snapshot of all captions is saved automatically before every batch change "
@@ -405,6 +442,14 @@ def create_captions_tab(initial_agent_team_choices, initial_vision_models):
         "pair_mode": pair_mode, "pair_extra": pair_extra, "pair_scope": pair_scope,
         "pair_generate_button": pair_generate_button, "pair_stop": pair_stop, "pair_export_format": pair_export_format,
         "pair_export_button": pair_export_button, "pair_export_code": pair_export_code, "pair_export_file": pair_export_file,
+        # Tier 3
+        "set_dropdown": set_dropdown, "set_refresh_button": set_refresh_button, "set_name": set_name,
+        "set_description": set_description, "set_save_button": set_save_button, "set_activate_button": set_activate_button,
+        "set_delete_button": set_delete_button, "set_compare_button": set_compare_button, "set_variant_mode": set_variant_mode,
+        "set_materialize_button": set_materialize_button, "set_compare_md": set_compare_md,
+        "set_compare_table": set_compare_table, "set_histogram": set_histogram, "sweep_strategies": sweep_strategies,
+        "sweep_prefix": sweep_prefix, "sweep_run_button": sweep_run_button, "sweep_stop_button": sweep_stop_button,
+        "sweep_status_md": sweep_status_md,
     }
 
 
@@ -655,3 +700,32 @@ def wire_captions_tab(c, *, paths_state, captions_state, selected_state, setting
         inputs=[c["pair_export_format"], c["pairs_state"], c["pair_target"], c["pair_controls"], c["trigger_textbox"]],
         outputs=[c["pair_status"], c["pair_export_code"], c["pair_export_file"]],
     )
+
+    # --- caption sets & caption sweep ---
+    c["set_refresh_button"].click(fn=lab_ui.set_choices, inputs=[paths_state], outputs=[c["set_dropdown"]])
+    c["captions_load_button"].click(fn=lab_ui.set_choices, inputs=[paths_state], outputs=[c["set_dropdown"]])
+    c["set_dropdown"].change(fn=lab_ui.set_histogram, inputs=[paths_state, c["set_dropdown"]], outputs=[c["set_histogram"]])
+    c["set_save_button"].click(fn=lab_ui.save_active_as_set,
+                               inputs=[paths_state, captions_state, c["set_name"], c["set_description"]],
+                               outputs=[status, c["set_dropdown"]])
+    c["set_activate_button"].click(
+        fn=lab_ui.activate_set, inputs=[paths_state, captions_state, c["set_dropdown"]], outputs=[status, captions_state],
+    ).then(fn=dui.sync_editor, inputs=sync_inputs, outputs=editor_outputs
+    ).then(fn=dui.term_rows, inputs=term_inputs, outputs=[c["term_table"]]
+    ).then(fn=dui.snapshot_dropdown, inputs=[paths_state], outputs=[c["snapshot_dropdown"]])
+    c["set_delete_button"].click(fn=lab_ui.delete_set, inputs=[paths_state, c["set_dropdown"]],
+                                 outputs=[status, c["set_dropdown"]])
+    c["set_compare_button"].click(fn=lab_ui.compare_sets, inputs=[paths_state, c["profile_dropdown"], c["trigger_textbox"]],
+                                  outputs=[c["set_compare_table"], c["set_compare_md"]])
+    c["set_materialize_button"].click(fn=lab_ui.materialize_set,
+                                      inputs=[paths_state, c["set_dropdown"], c["set_variant_mode"]], outputs=[status])
+    sweep_event = c["sweep_run_button"].click(
+        fn=lab_ui.iter_caption_sweep,
+        inputs=[c["sweep_strategies"], c["sweep_prefix"], paths_state, captions_state, c["caption_agent_selector"],
+                c["caption_model_selector"]] + shared + [c["caption_instruction"], c["caption_prefix"], c["caption_suffix"],
+                c["profile_dropdown"], c["preset_dropdown"], c["style_radio"], c["joiner_dropdown"], c["omit_textbox"],
+                c["temperature_slider"], c["seed_number"], c["max_side_slider"], c["retries_slider"],
+                c["caption_options_box"], c["class_textbox"], c["extra_textbox"]] + source_inputs,
+        outputs=[c["sweep_status_md"], c["set_compare_table"], c["set_dropdown"]],
+    )
+    c["sweep_stop_button"].click(fn=None, cancels=[sweep_event])

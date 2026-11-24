@@ -77,6 +77,11 @@ Prepare caption files for LoRA and fine-tune training. The full walkthrough is i
 9.  **Attributes:** edit the structured fields of every image in one sheet and rebuild captions from selected fields.
 10. **Health & Audit:** scan images and captions for problems, simulate training buckets, audit caption consistency, and check captions with a second model.
 11. **Edit Pairs:** prepare before/after datasets for edit models, with instruction captions.
+12. **Caption Sets:** keep alternative captions next to the active ones and generate several at once with the Caption Sweep, to train and compare LoRAs on different captions.
+
+### LoRA Lab Tab
+
+Test trained LoRAs: versioned validation prompt sets, test sweeps through ComfyUI or Forge (LoRA files × strengths × prompts × seeds, with a no-LoRA baseline and labelled grids), blind pairwise votes, optional metrics, and experiment records with reports. See [lora-lab-guide.md](lora-lab-guide.md).
 
 ### 4.3. Agent Team Editor Tab
 

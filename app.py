@@ -49,6 +49,7 @@ from ui.history_tab import create_history_tab
 from ui.sweep_tab import create_sweep_tab
 from ui.captions_tab import create_captions_tab, wire_captions_tab
 from ui.image_gen_tab import create_image_gen_tab
+from ui.lora_lab_tab import create_lora_lab_tab, wire_lora_lab_tab
 from ui.common_ui_elements import create_footer
 from core.image_utils import pillow_security_warning
 # Import captioning logic
@@ -157,6 +158,7 @@ with gr.Blocks(title="ArtAgents", delete_cache=(3600, 86400)) as demo:
         chat_comps = create_chat_tab(initial_agent_team_choices, model_names_with_vision, limiters_names, settings)
         caption_comps = create_captions_tab(initial_agent_team_choices, vision_model_names)
         image_comps = create_image_gen_tab(settings)
+        lab_comps = create_lora_lab_tab(settings, vision_model_names, all_initial_worker_model_choices)
         editor_comps = create_team_editor_tab(initial_team_names=sorted(team_names), initial_available_agent_names=all_available_agent_display_names_initial)
         sweep_comps = create_sweep_tab(initial_team_names=sorted(team_names), initial_model_names=all_initial_worker_model_choices)
         history_comps = create_history_tab(history_list)
@@ -429,6 +431,10 @@ with gr.Blocks(title="ArtAgents", delete_cache=(3600, 86400)) as demo:
         file_agents_state=chat_comps['loaded_file_agents_state'], history_list_state=history_list_state,
         session_history_state=session_history_state,
     )
+
+
+    # -- LoRA Lab Tab Wiring (events live in ui/lora_lab_tab.py) --
+    wire_lora_lab_tab(lab_comps, settings_state=settings_state)
 
 
     # -- Image Generation Tab Wiring --

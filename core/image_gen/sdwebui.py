@@ -85,6 +85,10 @@ class SDWebUIBackend(ImageBackend):
         samplers = self._json(self._api("get", "/samplers"), "sampler list")
         return [s["name"] for s in samplers if isinstance(s, dict) and s.get("name")]
 
+    def list_loras(self) -> list[str]:
+        loras = self._json(self._api("get", "/loras"), "LoRA list")
+        return sorted(l["name"] for l in loras if isinstance(l, dict) and l.get("name"))
+
     def interrupt(self) -> None:
         try:
             self._api("post", "/interrupt")
@@ -93,8 +97,13 @@ class SDWebUIBackend(ImageBackend):
 
     @staticmethod
     def build_payload(req: ImageGenRequest) -> dict:
+        prompt = req.prompt or ""
+        for lora_name, strength in req.loras or []:
+            if float(strength) != 0:  # Strength 0 = baseline without the LoRA
+                stem = str(lora_name).rsplit(".", 1)[0] if str(lora_name).lower().endswith((".safetensors", ".pt", ".ckpt")) else str(lora_name)
+                prompt = f"{prompt} <lora:{stem}:{float(strength):g}>".strip()
         payload = {
-            "prompt": req.prompt or "",
+            "prompt": prompt,
             "negative_prompt": req.negative_prompt or "",
             "width": int(req.width),
             "height": int(req.height),

@@ -34,6 +34,7 @@ class ImageGenRequest:
     model: str | None = None          # A1111 checkpoint title / ComfyUI ckpt_name / Ollama model name
     sampler: str | None = None
     workflow: str | None = None       # ComfyUI workflow filename (image_workflows/comfyui/*.json)
+    loras: list = field(default_factory=list)  # [(lora name, strength)]: %lora_*% placeholders / <lora:…> tags
 
 
 @dataclass

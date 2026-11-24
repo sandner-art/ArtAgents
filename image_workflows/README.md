@@ -32,6 +32,12 @@ Type these into the workflow's widget values before exporting. ArtAgents replace
 | `%sampler%` | Sampler name (default `euler`) |
 | `%batch_size%` | Images per run |
 | `%checkpoint%` | Checkpoint chosen in the Model dropdown (required when used) |
+| `%lora_name%` | LoRA file name for LoRA Lab test sweeps (put it in a `LoraLoader` node) |
+| `%lora_strength%`, `%lora_clip_strength%` | LoRA strength for the model / text encoder. The no-LoRA baseline uses 0. |
+
+`lora_txt2img.json` is the same graph with a `LoraLoader` (checkpoint → LoRA → prompts → KSampler). Use it, or add
+the LoRA placeholders to your own workflow, for the LoRA Lab tab. For Forge / A1111 / SD.Next no workflow is needed:
+ArtAgents adds `<lora:name:strength>` to the prompt.
 
 Numeric placeholders must be the *whole* value. ComfyUI gets real numbers, not strings. `basic_txt2img.json` is a complete example (checkpoint → prompts → KSampler → SaveImage).
 

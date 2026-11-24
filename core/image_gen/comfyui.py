@@ -238,9 +238,30 @@ def _auto_inject(workflow: dict, req: ImageGenRequest, seed: int, name: str) -> 
             inputs["ckpt_name"] = req.model
 
 
+def _apply_lora(workflow: dict, req: ImageGenRequest, name: str) -> None:
+    """Fills %lora_name% / %lora_strength% / %lora_clip_strength% (first LoRA of the request)."""
+    has_slot = _has_placeholder(workflow, "%lora_name%")
+    if req.loras and not has_slot:
+        raise ImageGenError(f"{name} has no %lora_name% placeholder, so a LoRA can't be applied. "
+                            "Use lora_txt2img.json or add a LoraLoader with %lora_name% / %lora_strength% "
+                            "(see image_workflows/README.md).")
+    if not has_slot:
+        return
+    if not req.loras:
+        raise ImageGenError(f"{name} expects a LoRA (%lora_name%). Pick one, or use a workflow without a LoRA loader.")
+    lora_name, strength = req.loras[0][0], float(req.loras[0][1])
+    values = {"%lora_name%": lora_name, "%lora_strength%": strength, "%lora_clip_strength%": strength}
+    for node in workflow.values():
+        inputs = node.get("inputs", {})
+        for key, value in list(inputs.items()):
+            if isinstance(value, str) and value in values:
+                inputs[key] = values[value]
+
+
 def prepare_workflow(workflow: dict, req: ImageGenRequest, seed: int, name: str = "workflow") -> dict:
     """Returns a copy of the workflow with the request's values filled in."""
     prepared = copy.deepcopy(workflow)
+    _apply_lora(prepared, req, name)
     if _has_placeholder(prepared, "%prompt%"):
         _apply_placeholders(prepared, req, seed)
     else:
@@ -337,6 +358,9 @@ class ComfyUIBackend(ImageBackend):
 
     def list_samplers(self) -> list[str]:
         return self._object_info_combo("KSampler", "sampler_name")
+
+    def list_loras(self) -> list[str]:
+        return self._object_info_combo("LoraLoader", "lora_name")
 
     def interrupt(self) -> None:
         try:

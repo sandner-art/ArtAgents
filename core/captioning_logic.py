@@ -24,6 +24,10 @@ SOURCE_TAGGER_PLUS = "tagger_plus"    # Tagger tags, then the vision model's cap
 SOURCE_STRUCTURED = "structured"      # Vision model fills JSON fields; caption assembled from a template
 TAGGER_SOURCES = (SOURCE_TAGGER, SOURCE_TAGGER_HINTS, SOURCE_TAGGER_PLUS)
 
+
+class _SkipProvenance(Exception):
+    """Internal: caption-set output has no per-image provenance."""
+
 _THUMBNAILS: dict[str, tuple[float, object]] = {}
 _THUMBNAIL_CACHE_LIMIT = 3000
 
@@ -445,10 +449,12 @@ def generate_captions_for_selected(
     updated_captions = dict(current_captions or {})
     current_session_history = list(session_history or [])
     instruction = (caption_instruction or "").strip() or DEFAULT_CAPTION_INSTRUCTION
-    text_path = caption_io.caption_path(image_path)
+    extension = config.get("extension") or ".txt"  # ".<set>.txt" writes into a caption set, not the active captions
+    active = extension == ".txt"
+    text_path = caption_io.caption_path(image_path, extension)
     text_filename = os.path.basename(text_path)
     caption_exists = os.path.exists(text_path)
-    original_caption = updated_captions.get(selected_filename, "")
+    original_caption = updated_captions.get(selected_filename, "") if active else caption_io.read_caption(image_path, extension)
 
     def finish(outcome: str, details: list[str], caption_shown: str = ""):
         duration = time.time() - start_time
@@ -576,7 +582,7 @@ def generate_captions_for_selected(
                     caption = ", ".join(dict.fromkeys(tag_list + [t.strip() for t in caption.split(",") if t.strip()]))
                 elif tag_list:
                     caption = f"{', '.join(tag_list)}. {caption}"
-            if fields_record is not None:
+            if fields_record is not None and active:
                 try:
                     structured.save_fields(image_path, fields_record, model=model_label)
                 except OSError as e:
@@ -595,11 +601,14 @@ def generate_captions_for_selected(
 
         joiner = config.get("joiner") or (", " if style == "tags" else " ")
         final_text = caption_io.combine(original_caption if caption_exists else "", caption, generate_mode, joiner)
-        caption_io.write_caption(image_path, final_text)
-        updated_captions[selected_filename] = final_text
+        caption_io.write_caption(image_path, final_text, extension)
+        if active:
+            updated_captions[selected_filename] = final_text
 
         remaining = list(guardrails.check_caption(model_caption, style, max_output_tokens, omit_terms))
         try:
+            if not active:
+                raise _SkipProvenance  # Caption sets record their settings in the set manifest
             model_name = vision.clean_model_name(selected_model_display_name or "")
             provenance.write_provenance(image_path, {
                 "model": model_name if uses_model else f"tagger:{(tagger_record or {}).get('model')}",
@@ -622,6 +631,8 @@ def generate_captions_for_selected(
                 "caption_hash": provenance.text_hash(final_text),
                 "artagents_version": APP_VERSION,
             })
+        except _SkipProvenance:
+            pass
         except OSError as e:
             print(f"    Warning: could not write provenance: {e}")
 

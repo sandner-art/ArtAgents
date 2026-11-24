@@ -14,6 +14,16 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ##  Recent Updates
 
+### v0.13.0-alpha (November 2026): LoRA Lab — test what your captions did
+
+A full loop for caption experiments. See [docs/lora-lab-guide.md](docs/lora-lab-guide.md).
+
+*   **Caption sets** (`img.<set>.txt` next to `img.txt`) and a **Caption Sweep** that makes one set per strategy: trigger only, tags, short/long prose, structured, random-length mix, long + trigger-only variant, 95/5 model/human blend, quality tags on. Set statistics, activate with snapshot, and training copies with variants materialized per trainer (lines, kohya `---===---`, duplicated images).
+*   **Validation prompt sets**, versioned, in four buckets (training-like, held-out, trigger-less, unrelated) with `[trigger]` and kohya/FluxGym flags; starter prompts from your dataset, model-drafted prompts, sample-prompt export.
+*   **LoRA test sweeps** through ComfyUI (`%lora_name%` / `%lora_strength%` placeholders, new `lora_txt2img.json`) or Forge/A1111 (`<lora:name:weight>`): LoRA files × strengths × prompts × seeds, always with a no-LoRA baseline, labelled grids per prompt.
+*   **Blind pairwise voting** with Bradley-Terry scores and Wilson intervals, an order-swapped vision-model judge (experimental), and optional embedding metrics (fidelity, CLIP-T, CMMD, leakage vs baseline with bootstrap intervals; needs PyTorch).
+*   **Experiment records** in SQLite with Markdown/HTML reports.
+
 ### v0.12.0-alpha (November 2026): Dataset Quality Tools
 
 More tools in the Image Captions tab for building and checking training datasets. See [docs/captions-guide.md](docs/captions-guide.md).
@@ -128,6 +138,8 @@ ArtAgent/
 │   ├── captioning_logic.py # Logic for caption editing & generation
 │   ├── dataset_ui.py       # Captions tab callbacks (profiles, terms, snapshots)
 │   ├── dataset_tools_ui.py # Captions tab: tagger, attributes, health, export, edit pairs
+│   ├── lab_ui.py           # Caption sets / sweep and LoRA Lab callbacks
+│   ├── lab/                # Caption sets, validation prompts, LoRA sweeps, metrics, voting, experiments
 │   ├── openai_compat.py    # OpenAI-compatible vision server client
 │   ├── dataset/            # Captions, CLIP tokenizer, guardrails, snapshots, tagger, health, audit, export
 │   ├── history_manager.py  # Loads/saves persistent history
@@ -144,6 +156,7 @@ ArtAgent/
 │   ├── captions_tab.py     # UI for caption editing & generation
 │   ├── team_editor_tab.py  # UI for editing teams
 │   ├── sweep_tab.py        # UI for experiment sweeps
+│   ├── lora_lab_tab.py     # LoRA Lab: validation prompts, test sweeps, votes, experiments
 │   ├── history_tab.py
 │   ├── info_tab.py         # Consolidated info tab (replaces roles_tab.py)
 │   ├── app_settings_tab.py
