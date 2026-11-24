@@ -179,6 +179,7 @@ class OllamaClient:
         options: dict | None = None,
         think: bool | str | None = None,
         keep_alive: str | int | None = None,
+        format: dict | str | None = None,
     ) -> Iterator[tuple[str, str]]:
         """
         Streams a chat completion.
@@ -194,6 +195,8 @@ class OllamaClient:
             payload["think"] = think
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
+        if format:  # "json" or a JSON schema (structured outputs)
+            payload["format"] = format
 
         resp = self._request("POST", "/api/chat", json=payload, stream=True, timeout=(self.timeout, self.generation_timeout))
         try:

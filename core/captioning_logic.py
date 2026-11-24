@@ -10,11 +10,19 @@ from PIL import Image
 from .app_logic import execute_chat_or_team
 from .image_utils import IMAGE_EXTENSIONS, make_thumbnail, open_image
 from .ollama_client import OllamaClient, OllamaError
-from .dataset import caption_io, guardrails, provenance, snapshots
+from .dataset import caption_io, guardrails, profiles, provenance, snapshots, structured, tagger, vision
 from .dataset.tokens import budget_markdown
 from .version import APP_VERSION
 
 DEFAULT_CAPTION_INSTRUCTION = "Describe this image concisely. Focus on the main subject, action, and setting. Do not add commentary."
+
+# Caption sources (config["source"])
+SOURCE_VLM = "vlm"                    # Vision model only (agent / team / direct)
+SOURCE_TAGGER = "tagger"              # Booru tagger only, no vision model
+SOURCE_TAGGER_HINTS = "tagger_hints"  # Tagger tags are given to the vision model as hints
+SOURCE_TAGGER_PLUS = "tagger_plus"    # Tagger tags, then the vision model's caption
+SOURCE_STRUCTURED = "structured"      # Vision model fills JSON fields; caption assembled from a template
+TAGGER_SOURCES = (SOURCE_TAGGER, SOURCE_TAGGER_HINTS, SOURCE_TAGGER_PLUS)
 
 _THUMBNAILS: dict[str, tuple[float, object]] = {}
 _THUMBNAIL_CACHE_LIMIT = 3000
@@ -344,6 +352,7 @@ def default_caption_config() -> dict:
         "style": "prose", "joiner": " ", "omit_terms": [], "strip_omitted": False,
         "temperature": None, "seed": None, "max_image_side": None, "retries": 0,
         "max_output_tokens": 150, "budgets": [], "profile": None, "preset": None,
+        "source": SOURCE_VLM, "backend": vision.BACKEND_OLLAMA, "openai": {}, "tagger": {}, "structured": {},
     }
 
 
@@ -414,9 +423,17 @@ def generate_captions_for_selected(
 
     if not selected_filename:
         return "No image selected in the gallery.", current_captions, "", session_history
-    if not agent_or_team_display_name:
+    source = config.get("source") or SOURCE_VLM
+    backend = config.get("backend") or vision.BACKEND_OLLAMA
+    uses_model = source != SOURCE_TAGGER
+    openai_cfg = config.get("openai") or {}
+    if backend == vision.BACKEND_OPENAI:
+        selected_model_display_name = openai_cfg.get("model") or ""
+        if uses_model and not (openai_cfg.get("base_url") and selected_model_display_name):
+            return "Enter the server URL and model name for the OpenAI-compatible backend.", current_captions, "", session_history
+    elif uses_model and not agent_or_team_display_name and source != SOURCE_STRUCTURED:
         return "Please select an Agent, a Team or '(Direct Agent Call)' for captioning.", current_captions, "", session_history
-    if not selected_model_display_name:
+    if uses_model and not selected_model_display_name:
         return "Please select a Vision Model for captioning.", current_captions, "", session_history
 
     image_path = image_paths.get(selected_filename)
@@ -453,17 +470,49 @@ def generate_captions_for_selected(
 
     img = None
     caption, issues, attempts = "", [], 0
+    retry_reasons: list[str] = []
+    options = dict(base_options)
+    profile = profiles.get_profile(config.get("profile")) if config.get("profile") else {}
+    tagger_opts = dict(config.get("tagger") or {})
+    tagger_record, fields_record = None, None
+    direct = backend == vision.BACKEND_OPENAI or source == SOURCE_STRUCTURED
+    target = vision.VisionTarget(backend, selected_model_display_name or "", openai_cfg.get("base_url", ""),
+                                 openai_cfg.get("api_key", ""))
+    model_label = target.label if uses_model else ""
+    used_instruction = instruction
     try:
         img = _prepare_image(image_path, config.get("max_image_side"))
-        options = dict(base_options)
-        for attempt in range(retries + 1):
-            attempts = attempt + 1
+
+        tag_list: list[str] = []
+        if source in TAGGER_SOURCES:
+            tcfg = tagger.get_tagger(tagger_opts.get("label"))
+            probs, cached = tagger.tag_probabilities(tcfg, image_path, img, reuse=tagger_opts.get("reuse", True))
+            selection = tagger.select(probs, tagger_opts)
+            tag_list = tagger.format_tags(selection, profile, tagger_opts)
+            if omit_terms:
+                tag_list = [t for t in tag_list if not guardrails.find_terms(t, omit_terms, "tags")]
+            tagger_record = {"model": tcfg.get("id"), "thresholds": selection.get("thresholds"), "cached": cached,
+                             "tags": len(tag_list)}
+            if source == SOURCE_TAGGER_HINTS:
+                if omit_terms:  # Never hint at words the model is told not to mention
+                    selection = dict(selection, **{key: [(n, p) for n, p in selection.get(key, [])
+                                                         if not guardrails.find_terms(tagger.display_tag(n), omit_terms, "tags")]
+                                                   for key in ("general", "characters")})
+                hint = tagger.hint_text(selection, float(tagger_opts.get("hint_threshold", 0.5)), profile)
+                if hint:
+                    used_instruction = f"{instruction}\n\n{hint}"
+
+        def call_model(prompt: str, opts: dict, json_schema: dict | None = None, max_tokens: int = max_output_tokens) -> str:
+            nonlocal current_session_history
+            if direct:  # OpenAI-compatible servers and structured output: plain model call, no agent persona
+                return vision.ask(target, settings, prompt, [img], temperature=opts.get("temperature"),
+                                  seed=opts.get("seed"), max_tokens=max_tokens, json_schema=json_schema)
             print(f"    Calling '{agent_or_team_display_name}' with '{selected_model_display_name}' (attempt {attempts})...")
             response_text, _, _, current_session_history = execute_chat_or_team(
                 folder_path=None,
-                user_input=instruction,
+                user_input=prompt,
                 model_with_vision=selected_model_display_name,
-                max_tokens_ui=max_output_tokens,
+                max_tokens_ui=max_tokens,
                 file_handling_option="Skip",
                 limiter_handling_option="Off",
                 single_image_input=img,
@@ -479,19 +528,59 @@ def generate_captions_for_selected(
                 file_agents_dict=file_agents,
                 history_list_state=history_list,
                 session_history_list_state=current_session_history,
-                ollama_option_overrides=options or None,
+                ollama_option_overrides=opts or None,
             )
             if response_text is None or (isinstance(response_text, str) and (response_text.startswith("Error:") or response_text.startswith("⚠️ Error:"))):
                 raise ValueError(f"Agent/Team returned an error: {response_text}")
-            caption = guardrails.clean_caption(response_text, style)
-            issues = guardrails.check_caption(caption, style, max_output_tokens, omit_terms)
-            retryable = [i for i in issues if i in guardrails.RETRYABLE]
-            if not retryable or attempt == retries:
-                break
-            print(f"    Caption issues {retryable}; retrying with a new seed.")
-            options = dict(base_options)
-            options["seed"] = int(base_options.get("seed", 42)) + attempt + 1
-            options["temperature"] = max(float(base_options.get("temperature") or 0.0), 0.3)
+            return response_text
+
+        if source == SOURCE_TAGGER:
+            caption, attempts = ", ".join(tag_list), 1
+            style = "tags"
+            if not caption:
+                raise ValueError("The tagger found no tags above the thresholds.")
+        else:
+            sconf = config.get("structured") or {}
+            field_ids = list(sconf.get("fields") or structured.DEFAULT_FIELDS)
+            vlm_style = "prose" if source == SOURCE_TAGGER_PLUS and style != "tags" else style
+            for attempt in range(retries + 1):
+                attempts = attempt + 1
+                if source == SOURCE_STRUCTURED:
+                    prompt = structured.instruction(field_ids, style, sconf.get("extra", ""))
+                    raw = call_model(prompt, options, structured.json_schema(field_ids), max(400, 3 * max_output_tokens))
+                    try:
+                        fields = structured.normalize_fields(vision.parse_json_object(raw), field_ids)
+                        caption = structured.render(fields, sconf.get("template") or structured.default_template(field_ids, style),
+                                                    style, sconf.get("include"))
+                        caption = guardrails.clean_caption(caption, style)
+                        fields_record = fields
+                        issues = guardrails.check_caption(caption, style, 10 ** 6, omit_terms)
+                    except ValueError as parse_error:
+                        caption, issues = "", ["invalid JSON"]
+                        print(f"    Structured output could not be read: {parse_error}")
+                    retryable = [i for i in issues if i in guardrails.RETRYABLE or i == "invalid JSON"]
+                else:
+                    response_text = call_model(used_instruction, options)
+                    caption = guardrails.clean_caption(response_text, vlm_style)
+                    issues = guardrails.check_caption(caption, vlm_style, max_output_tokens, omit_terms)
+                    retryable = [i for i in issues if i in guardrails.RETRYABLE]
+                if not retryable or attempt == retries:
+                    break
+                retry_reasons.extend(retryable)
+                print(f"    Caption issues {retryable}; retrying with a new seed.")
+                options = dict(base_options)
+                options["seed"] = int(base_options.get("seed", 42)) + attempt + 1
+                options["temperature"] = max(float(base_options.get("temperature") or 0.0), 0.3)
+            if source == SOURCE_TAGGER_PLUS and caption:
+                if style == "tags":
+                    caption = ", ".join(dict.fromkeys(tag_list + [t.strip() for t in caption.split(",") if t.strip()]))
+                elif tag_list:
+                    caption = f"{', '.join(tag_list)}. {caption}"
+            if fields_record is not None:
+                try:
+                    structured.save_fields(image_path, fields_record, model=model_label)
+                except OSError as e:
+                    print(f"    Warning: could not save structured fields: {e}")
 
         if not caption:
             raise ValueError("The model returned an empty caption.")
@@ -511,14 +600,19 @@ def generate_captions_for_selected(
 
         remaining = list(guardrails.check_caption(model_caption, style, max_output_tokens, omit_terms))
         try:
+            model_name = vision.clean_model_name(selected_model_display_name or "")
             provenance.write_provenance(image_path, {
-                "model": selected_model_display_name.replace(" (VISION)", ""),
-                "model_digest": _model_digest(settings, selected_model_display_name.replace(" (VISION)", "")),
-                "agent": agent_or_team_display_name,
+                "model": model_name if uses_model else f"tagger:{(tagger_record or {}).get('model')}",
+                "model_digest": _model_digest(settings, model_name) if uses_model and backend == vision.BACKEND_OLLAMA else "",
+                "backend": backend if uses_model else "tagger",
+                "source": source,
+                "tagger": tagger_record,
+                "fields": fields_record,
+                "agent": "(Direct)" if (direct or not uses_model) else agent_or_team_display_name,
                 "profile": config.get("profile"),
                 "preset": config.get("preset"),
-                "instruction": instruction,
-                "instruction_hash": provenance.prompt_hash(instruction),
+                "instruction": used_instruction if uses_model else "",
+                "instruction_hash": provenance.prompt_hash(used_instruction) if uses_model else "",
                 "options": options,
                 "max_image_side": config.get("max_image_side"),
                 "mode": generate_mode,
@@ -535,7 +629,7 @@ def generate_captions_for_selected(
                   caption_io.MODE_VARIANT: "Added as variant"}.get(generate_mode, "Overwritten" if caption_exists else "Written")
         details = [f"- Success {selected_filename}: Caption generated and file {action}."]
         if attempts > 1:
-            details.append(f"  Retried {attempts - 1}x because of: {', '.join(issues) or 'glitches'}.")
+            details.append(f"  Retried {attempts - 1}x because of: {', '.join(dict.fromkeys(retry_reasons)) or 'glitches'}.")
         if remaining:
             details.append(f"  ⚠️ Check this caption: {', '.join(remaining)}.")
         budget_line = budget_markdown(caption, config.get("budgets") or [])
@@ -584,10 +678,16 @@ def iter_generate_captions_for_all(
 
     if not image_paths:
         yield "No images loaded.", current_captions, "", session_history; return
-    if not selected_model_display_name:
-        yield "Please select a Vision Model.", current_captions, "", session_history; return
-    if not agent_or_team_display_name:
-        yield "Please select an Agent, a Team or '(Direct Agent Call)'.", current_captions, "", session_history; return
+    cfg = caption_config or {}
+    source = cfg.get("source") or SOURCE_VLM
+    if cfg.get("backend") == vision.BACKEND_OPENAI:
+        if source != SOURCE_TAGGER and not ((cfg.get("openai") or {}).get("base_url") and (cfg.get("openai") or {}).get("model")):
+            yield "Enter the server URL and model name for the OpenAI-compatible backend.", current_captions, "", session_history; return
+    elif source != SOURCE_TAGGER:
+        if not selected_model_display_name:
+            yield "Please select a Vision Model.", current_captions, "", session_history; return
+        if not agent_or_team_display_name and source != SOURCE_STRUCTURED:
+            yield "Please select an Agent, a Team or '(Direct Agent Call)'.", current_captions, "", session_history; return
 
     all_filenames = sorted(image_paths.keys())
     snap_note = _snapshot(image_paths, "before AI captioning (all)")

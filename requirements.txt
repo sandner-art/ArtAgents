@@ -15,3 +15,4 @@ numpy>=1.26,<3
 # Caption profiles (dataset_profiles/*.yaml); also installed by Gradio.
 PyYAML>=6.0.2
 # Pillow is pinned in requirements-pillow.txt (see the note there).
+# Optional: booru tagger in the Captions tab needs onnxruntime (or onnxruntime-gpu / onnxruntime-directml).

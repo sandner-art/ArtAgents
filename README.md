@@ -14,6 +14,17 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ##  Recent Updates
 
+### v0.12.0-alpha (November 2026): Dataset Quality Tools
+
+More tools in the Image Captions tab for building and checking training datasets. See [docs/captions-guide.md](docs/captions-guide.md).
+
+*   **Booru tagger** (WD v3 SwinV2 / EVA02 and other ONNX taggers, optional `onnxruntime`): tags in the target model's order and rating names, thresholds or MCut, blacklist, stored scores. Use it alone, as hints for the vision model, or tags + a vision-model sentence.
+*   **OpenAI-compatible vision backend** (LM Studio, vLLM, llama.cpp…) for captioners such as JoyCaption or ToriiGate.
+*   **Structured captions + attribute sheet:** the model fills fields (subject, clothing, setting…) as JSON; edit them in a sheet, see which values are constant, and rebuild captions from chosen fields without re-running the model.
+*   **Health & Audit:** resolution, duplicates and near-duplicates, relative blur, transparency, caption problems; quarantine instead of delete; kohya bucket simulator; caption consistency audit (contradictions, triggers, tagger disagreements); experimental cross-model verifier with absent-object controls.
+*   **Trainer configs** for kohya-ss, musubi-tuner, ai-toolkit, OneTrainer, SimpleTuner and diffusion-pipe, plus a repeats calculator.
+*   **Edit Pairs** for Kontext / FLUX.2 edit / Qwen-Image-Edit: pair validation, instruction captions with extra phrasings, ai-toolkit / musubi / fal export.
+
 ### v0.11.0-alpha (November 2026): Training Dataset Captions
 
 The Image Captions tab is now a dataset tool for LoRA / fine-tune training. See [docs/captions-guide.md](docs/captions-guide.md).
@@ -75,7 +86,7 @@ Three new teams have been added to `agent_teams.json` to leverage these strategi
 *   **Team Editor:** Create, edit, save, and delete Agent Teams via a dedicated UI tab.
 *   **Chat Interface:** Main tab for direct interaction with selected agents or teams, including session history and response refinement.
 *   **Multimodal Input:** Supports single image upload or processing images within a specified folder for chat or captioning context.
-*   **Training Captions:** load an image folder, edit `.txt` captions, and generate them with vision models using target-model profiles and dataset-type presets; token counts, tag statistics, bulk edits, snapshots with restore, provenance, and `metadata.jsonl` / `metadata.csv` export.
+*   **Training Captions:** load an image folder, edit `.txt` captions, and generate them with vision models (Ollama or OpenAI-compatible servers) or a booru tagger, using target-model profiles and dataset-type presets; structured captions, token counts, tag statistics, bulk edits, dataset health scan and audit, bucket simulation, snapshots with restore, provenance, edit-pair datasets, and exports for common trainers.
 *   **Experiment Sweeps:** Systematically run base prompts across multiple selected Agent Teams and Worker Models. Saves detailed JSON protocol files for each run and separate `.txt` files containing the raw generated prompts per model.
 *   **Configuration Management:** External JSON files for easy customization of settings, models, limiters, API profiles, agent roles, and agent teams.
 *   **App Settings UI:** Dedicated tab to configure Ollama URL, agent loading preferences, default behaviors, UI theme, and detailed Ollama API parameters (with loadable profiles).
@@ -116,7 +127,9 @@ ArtAgent/
 │   ├── agent_manager.py    # Orchestrates Agent Team Workflows
 │   ├── captioning_logic.py # Logic for caption editing & generation
 │   ├── dataset_ui.py       # Captions tab callbacks (profiles, terms, snapshots)
-│   ├── dataset/            # Caption files, CLIP tokenizer, guardrails, snapshots, provenance
+│   ├── dataset_tools_ui.py # Captions tab: tagger, attributes, health, export, edit pairs
+│   ├── openai_compat.py    # OpenAI-compatible vision server client
+│   ├── dataset/            # Captions, CLIP tokenizer, guardrails, snapshots, tagger, health, audit, export
 │   ├── history_manager.py  # Loads/saves persistent history
 │   ├── ollama_checker.py   # Ollama startup check logic
 │   ├── ollama_manager.py   # Ollama model release logic
@@ -175,6 +188,8 @@ ArtAgent/
         pip install -r requirements.txt
         pip install --no-deps -r requirements-pillow.txt
         ```
+        Optional, for the booru tagger in the Captions tab: `pip install onnxruntime` (or `onnxruntime-gpu` / `onnxruntime-directml` for GPU).
+
         The second step installs the patched Pillow 13. Gradio still declares `pillow<13`, so pip cannot resolve both in one command; `pip check` will mention that cap, which is expected. The app prints a warning at startup if an older Pillow is installed.
     *   **(Alternative) Using Scripts:** Run `.\scripts\setupvenv.bat` (Windows) or `scripts/setupvenv.sh` (Linux/macOS) to create `venv` in the project root and run both install steps. Start the app with `.\scripts\govenv.bat` or `scripts/govenv.sh`.
     *   **Upgrading an existing install:** activate your venv and run the two `pip install` commands above.

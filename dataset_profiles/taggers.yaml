@@ -1,0 +1,67 @@
+# ArtAgents booru taggers (ONNX). Edit freely; new entries appear after a restart.
+#
+# Weights are downloaded at first use from Hugging Face (repo + files) into the
+# Hugging Face cache, or loaded from a local folder (folder: "C:/models/my-tagger").
+# Requires the optional package onnxruntime (pip install onnxruntime, or
+# onnxruntime-gpu / onnxruntime-directml for GPU).
+#
+# Preprocessing (defaults match SmilingWolf's WD v3 reference code):
+#   layout:     NHWC | NCHW            input tensor layout
+#   channels:   BGR | RGB
+#   pad:        [255, 255, 255]        square padding colour (WD pads with white)
+#   normalize:  none | unit | imagenet none = 0..255 floats, unit = 0..1, imagenet = (x/255 - mean) / std
+#   size:       input side in pixels (read from the model when omitted)
+#   sigmoid:    false                  true if the model outputs logits instead of probabilities
+# Labels CSV: needs a "name" column and a "category" column (0 general, 4 character, 9 rating).
+#
+# Check each model's license before using it commercially.
+
+taggers:
+  - id: wd-swinv2-v3
+    label: "WD SwinV2 v3 (general use)"
+    repo: SmilingWolf/wd-swinv2-tagger-v3
+    model_file: model.onnx
+    labels_file: selected_tags.csv
+    license: "Apache-2.0"
+    note: "kohya's recommendation for general tagging. Tags current to Feb 2024."
+
+  - id: wd-eva02-large-v3
+    label: "WD EVA02-Large v3 (most accurate, slower)"
+    repo: SmilingWolf/wd-eva02-large-tagger-v3
+    model_file: model.onnx
+    labels_file: selected_tags.csv
+    license: "Apache-2.0"
+    note: "kohya's recommendation for accuracy. About 1.2 GB."
+
+  - id: wd-vit-large-v3
+    label: "WD ViT-Large v3"
+    repo: SmilingWolf/wd-vit-large-tagger-v3
+    model_file: model.onnx
+    labels_file: selected_tags.csv
+    license: "Apache-2.0"
+
+  - id: wd-convnext-v3
+    label: "WD ConvNeXt v3"
+    repo: SmilingWolf/wd-convnext-tagger-v3
+    model_file: model.onnx
+    labels_file: selected_tags.csv
+    license: "Apache-2.0"
+
+  - id: wd-vit-v3
+    label: "WD ViT v3 (fastest)"
+    repo: SmilingWolf/wd-vit-tagger-v3
+    model_file: model.onnx
+    labels_file: selected_tags.csv
+    license: "Apache-2.0"
+
+  # Example of a local tagger with different preprocessing (check the model card for its values):
+  # - id: my-tagger
+  #   label: "My local tagger"
+  #   folder: "C:/models/my-tagger"
+  #   model_file: model.onnx
+  #   labels_file: tags.csv
+  #   layout: NCHW
+  #   channels: RGB
+  #   normalize: imagenet
+  #   pad: [127, 127, 127]
+  #   license: "check the model card"

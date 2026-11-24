@@ -73,6 +73,10 @@ Prepare caption files for LoRA and fine-tune training. The full walkthrough is i
 5.  **Tags & Terms:** see how often each tag appears, click one to filter the gallery, and rename, delete or find & replace in bulk.
 6.  **Batch Edit & Export:** append/prepend text on the same line, add caption variants (one per line), normalize old multi-caption files, and export `metadata.jsonl` / `metadata.csv`.
 7.  **Snapshots:** every batch change saves a snapshot first; compare or restore any of them.
+8.  **Caption source & backend:** captions can also come from a booru tagger (alone, as hints, or tags + sentence), from structured JSON fields, or from an OpenAI-compatible server such as LM Studio or vLLM.
+9.  **Attributes:** edit the structured fields of every image in one sheet and rebuild captions from selected fields.
+10. **Health & Audit:** scan images and captions for problems, simulate training buckets, audit caption consistency, and check captions with a second model.
+11. **Edit Pairs:** prepare before/after datasets for edit models, with instruction captions.
 
 ### 4.3. Agent Team Editor Tab
 

@@ -7,6 +7,8 @@
 # word_target:    default length asked from the captioner (words for prose, tags for tags)
 # tag_hint/order: added to the captioning instruction for tag profiles
 # quality_prefix: optional quality/score tags you can add to captions (off by default; an open experiment)
+# tagger:         booru tagger output for this model: order of tag groups (count, character, rating,
+#                 general) and rating_map (tagger rating -> this model's rating tag)
 # notes:          shown in the Guidance panel. evidence: measured | docs | visual-test | anecdotal | inference
 #
 # Sources: see the research report "Training dataset tagging and quality" (Nov 2026).
@@ -35,6 +37,10 @@ profiles:
     max_output_tokens: 160
     tag_hint: "Use Danbooru/e621-style tags. Include one source tag (source_anime, source_cartoon, source_furry or source_pony) and one rating tag (rating_safe, rating_questionable or rating_explicit)."
     quality_prefix: "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up"
+    tagger:
+      order: [rating, count, character, general]
+      # Pony has three ratings; mapping WD's "sensitive" to questionable is a judgement call.
+      rating_map: {general: rating_safe, sensitive: rating_questionable, questionable: rating_questionable, explicit: rating_explicit}
     notes:
       - text: "Pony was trained with the full score string (score_9, score_8_up, …); plain score_9 has a much weaker effect."
         evidence: docs
@@ -51,6 +57,9 @@ profiles:
     tag_order: "person count (1girl, 1boy, …), character, rating, general tags, artist, quality, year"
     tag_hint: "Use Danbooru tags."
     quality_prefix: "masterpiece, best quality"
+    tagger:
+      order: [count, character, rating, general]
+      rating_map: {general: general, sensitive: sensitive, questionable: nsfw, explicit: explicit}
     notes:
       - text: "Tag order used in training: person count, character, rating, general tags, artist, quality, year (adopted from NovelAI)."
         evidence: docs
@@ -71,6 +80,9 @@ profiles:
     tag_order: "1girl/1boy/1other, character, series, artists, special tags, general tags, other tags"
     tag_hint: "Use Danbooru tags. Ratings are safe, sensitive, nsfw or explicit."
     quality_prefix: "masterpiece, best quality, newest, absurdres, highres"
+    tagger:
+      order: [count, character, rating, general]
+      rating_map: {general: safe, sensitive: sensitive, questionable: nsfw, explicit: explicit}
     notes:
       - text: "Quality ladder: masterpiece > best quality > good quality > normal quality > worst quality. Date words: old, early, mid, recent, newest."
         evidence: docs

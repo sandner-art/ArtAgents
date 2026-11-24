@@ -1,0 +1,20 @@
+# Terms that should not appear together in one caption (used by the consistency audit).
+# Each group lists mutually exclusive terms, matched as whole words in tags and in prose.
+# Multi-person images can legitimately combine some of them, so the audit only flags them for review.
+
+groups:
+  - [short hair, medium hair, long hair, very long hair, absurdly long hair]
+  - [1girl, 2girls, 3girls, 4girls, 5girls, 6+girls, multiple girls]
+  - [1boy, 2boys, 3boys, 4boys, 5boys, 6+boys, multiple boys]
+  - [solo, multiple girls, multiple boys, 2girls, 2boys, group]
+  - [no humans, 1girl, 1boy, solo]
+  - [indoors, outdoors]
+  - [day, night]
+  - [standing, sitting, lying, kneeling]
+  - [open mouth, closed mouth]
+  - [closed eyes, open eyes, looking at viewer]
+  - [from above, from below]
+  - [monochrome, colorful]
+  - [greyscale, colorful]
+  - [smile, frown]
+  - [upper body, full body, portrait, cowboy shot]

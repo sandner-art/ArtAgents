@@ -65,6 +65,32 @@ text, sentences where tags were asked for) are retried with a new seed.
 Captions are cleaned before they are saved: markdown and openers are removed, duplicate tags are
 dropped, and tags you listed under **Never mention** are removed (in prose they are flagged).
 
+### Caption sources
+
+**Caption source** (top of AI Captioning) decides where captions come from:
+
+| Source | What happens |
+|---|---|
+| Vision model | The vision model (or agent / team) writes the caption, as above. |
+| Booru tagger only | A WD-style ONNX tagger writes Danbooru tags; no vision model is used. |
+| Tagger tags as hints for the vision model | Tags the tagger is confident about are added to the instruction as hints ("mention only what is clearly visible"). Grounds the vision model, e.g. for character names. |
+| Tagger tags + vision-model caption | Tagger tags first, then the vision model's caption: merged tags for tag models, or `tags. Sentence.` for prose / hybrid models. |
+| Structured fields (JSON) → caption | The model fills fields (subject, clothing, setting, …) as JSON; the caption is assembled from a template. See **Attributes** below. |
+
+**Booru tagger.** Choose a tagger (WD SwinV2 v3 by default; EVA02-Large is slower but more accurate). It needs the
+optional package `onnxruntime` (`pip install onnxruntime`, or `onnxruntime-gpu` / `onnxruntime-directml`), and
+downloads the model from Hugging Face on first use. Thresholds default to 0.35 (general) and 0.85 (character); MCut
+picks a cut-off per image instead. Output follows the target model: tag order, rating tag names (Pony
+`rating_safe`, Illustrious `general/sensitive/nsfw/explicit`, NoobAI `safe/…`), spaces instead of underscores. Raw
+scores are stored in `.artagents/tagger`, so changing thresholds does not run the model again. Taggers are listed in
+`dataset_profiles/taggers.yaml`; you can add a local ONNX tagger there with its own preprocessing.
+
+**Vision backend.** Besides Ollama you can use any **OpenAI-compatible server** (LM Studio, vLLM, llama.cpp's
+`llama-server`, KoboldCpp…). This is the dependable way to run captioners such as JoyCaption Beta One or ToriiGate.
+Enter the URL (e.g. `http://localhost:1234/v1`), press **🔄 List models**, pick the model. An API key is optional
+and never saved (or set `ARTAGENTS_VISION_API_KEY`). With this backend, and with structured fields, the instruction
+goes straight to the model; agents and teams run on Ollama only.
+
 ## 4. Tags & Terms
 
 The term table counts how many images contain each tag (or word / phrase in prose datasets).
@@ -88,7 +114,56 @@ The term table counts how many images contain each tag (or word / phrase in pros
 * **Export** writes `metadata.jsonl` or `metadata.csv` for training tools. Files with several
   variants export their first line, and the status lists them.
 
-## 6. Snapshots and undo
+**Trainer config** writes a dataset config for kohya-ss sd-scripts, musubi-tuner (FLUX, Qwen-Image, Wan…),
+ai-toolkit, OneTrainer, SimpleTuner or diffusion-pipe into `.artagents/export`. Repeats go into the config (your
+folders are never renamed); SimpleTuner's repeats are converted (kohya 10 = SimpleTuner 9). Keep tokens are counted
+from the trigger prefix. The file notes when captions have several lines, and for kohya adds `enable_wildcard`.
+
+**Repeats calculator**: repeats = max(1, round(target / images)) per concept (kohya's rule), with steps per epoch.
+Add other concept folders as `name: count` lines to balance a multi-concept dataset.
+
+## 6. Attributes (structured fields)
+
+After captioning with **Structured fields**, **🔄 Load sheet** shows every image's fields side by side. Edit cells and
+**Save sheet**. The summary flags fields whose value is the same in most images: a constant, unnamed detail is learned
+by the trigger, a captioned one stays changeable. Untick fields and **Render captions** to rebuild every caption
+from the stored fields without calling the model (a snapshot is saved first). **Export CSV** downloads the sheet.
+Typical use: for a character dataset, leave hair and eye colour out so the trigger learns them, keep clothing and
+setting in so they stay promptable.
+
+## 7. Health & Audit
+
+**Scan dataset** checks every image on your computer, without AI: resolution against the training resolution,
+extreme aspect ratios, colour mode and transparency, exact duplicates, near duplicates (perceptual hash), blur
+relative to the rest of the dataset, very dark or bright images, and caption problems (missing, empty, several
+lines, over the token budget, identical captions, trigger missing). **Show flagged images** filters the gallery.
+**Quarantine selected image** moves an image and its caption to `.artagents/quarantine`; **Restore quarantined**
+moves them back. Nothing is deleted. Results are cached in `.artagents/cache`.
+
+**Bucket simulator** replicates kohya's aspect-ratio buckets: which bucket each image lands in, how much is cropped
+and from which edge, and buckets that don't fill whole batches.
+
+**Caption consistency audit** lists contradictory terms (`dataset_profiles/contradictions.yaml`), missing or repeated
+triggers and triggers not at the start, several triggers in one caption (multi-concept leakage), words the dataset
+type says to leave out, and captions much longer or shorter than usual. With **Run tagger for comparison** it also
+lists caption tags the tagger scored very low, person counts that differ, and confident tagger tags the caption lacks.
+
+**Cross-model verifier (experimental)** asks a second vision model yes / no / unsure for each statement of a caption,
+mixed with two statements about objects that are not there. A "yes" to such a control means that model agrees too
+easily on that image. Use a model from a different family than the captioner. Disputed statements are listed;
+captions are never changed automatically.
+
+## 8. Edit Pairs
+
+For FLUX.1 Kontext, FLUX.2 edit and Qwen-Image-Edit LoRAs. Enter the **result** folder and the **input** folder(s)
+(up to 3); files are matched by name, any image extension. **Load pairs** checks for missing inputs, aspect-ratio
+mismatches and input sizes far from ~1 MP. **Write instructions** sends the input(s) and the result to the vision
+model and saves an imperative instruction ("Make the car red") next to each result; inputs get no captions. **Extra
+phrasings** adds alternative wordings as extra lines (BFL suggests 5–10 phrasings in total). Export for ai-toolkit
+(`control_path`), musubi-tuner (TOML or JSONL with `control_path` / `control_path_N`) or fal (zip of `_start` / `_end`
+pairs).
+
+## 9. Snapshots and undo
 
 Every batch change (AI batch, bulk edit, append/prepend, normalize, restore) first saves a snapshot
 of all caption files. In **Snapshots** you can **Compare with current** (a diff per file) or
@@ -106,7 +181,13 @@ my_dataset/
 ├── 001.txt
 └── .artagents/
     ├── snapshots/<time>-<operation>/   # caption files + manifest.json
-    └── provenance/001.json             # model, digest, instruction, seed, options, version
+    ├── provenance/001.json             # model, digest, instruction, seed, options, version
+    ├── tagger/001.json                 # tagger scores (re-threshold without re-running)
+    ├── structured/001.json             # structured fields
+    ├── verify/001.json                 # verifier answers
+    ├── cache/health.json               # health-scan measurements
+    ├── quarantine/                     # images moved out by the health scan
+    └── export/                         # trainer configs, attributes.csv
 ```
 
 Delete `.artagents` when you no longer need the history. Exclude it when you copy the dataset
@@ -115,6 +196,6 @@ to a training machine if your trainer scans subfolders.
 ## Editing profiles and presets
 
 Target models and dataset types are defined in `dataset_profiles/models.yaml` and
-`dataset_profiles/presets.yaml`. Both files explain their fields at the top. Edits to an existing
+`dataset_profiles/presets.yaml`; taggers in `taggers.yaml`, contradictory terms in `contradictions.yaml`. Both files explain their fields at the top. Edits to an existing
 entry apply on the next action; new or renamed entries appear in the lists after a restart.
 If a file is missing or invalid, built-in defaults are used and a warning is printed.
