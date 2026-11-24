@@ -69,6 +69,24 @@ has its own seeded generator.
 - If GRADIENT runs on another machine with an API token, put it in **GRADIENT API token** (not saved) or set
   `ARTAGENTS_GRADIENT_TOKEN` before starting ArtAgents.
 
+**Sweep file, when ArtAgents can't reach GRADIENT** (another computer without a network path, or an overnight
+render): open **GRADIENT on another machine: sweep file out, results folder back** under the run buttons.
+
+1. Set up the sweep as usual (type GRADIENT's model name as the Checkpoint if you can't connect) and press
+   **📤 Export sweep for GRADIENT**. ArtAgents makes the run folder (waiting for results) and offers
+   `<run>.lora-sweep.json` for download. LoRAs given as full paths carry their sha256, so GRADIENT finds them even
+   when renamed and refuses a different file; LoRAs given by name are found by name in GRADIENT's LoRA folder.
+2. In GRADIENT (0.9.1 or later): Queue → **Import test sweep…**, check the model and LoRAs, **Queue all**.
+   When the last image is done, GRADIENT writes a results folder; *Copy results path* is under *Test sweeps* in
+   its Queue panel.
+3. Back here: paste the folder into **Results folder from GRADIENT** and press **📥 Import GRADIENT results**. The
+   images, `run.json` and grids go into the run from step 1, so Score & Vote and Experiments work as for a direct
+   run. Failed images show as errors; importing again (e.g. after GRADIENT rendered the rest) replaces them.
+
+The results must belong to a sweep file exported from this ArtAgents (matched by its sha256); results of another
+sweep are refused. The folder is read as untrusted input: image files must stay inside it and are saved again as
+PNG.
+
 For multi-concept LoRAs, put each trigger alone and the triggers together into the validation set; the grids then
 show leakage between concepts.
 

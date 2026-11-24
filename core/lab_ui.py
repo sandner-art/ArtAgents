@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import random
+import shutil
+import tempfile
 
 import gradio as gr
 
@@ -15,7 +17,7 @@ from .dataset import caption_io, profiles, vision
 from .image_gen import BACKENDS, ImageGenError, get_backend, list_workflows
 from .image_gen_settings import backend_url, image_gen_settings
 from .lab import caption_sets as cs
-from .lab import experiments, lora_sweep, metrics, validation, voting
+from .lab import experiments, lora_sweep, metrics, sweep_file, validation, voting
 from .utils import get_absolute_path
 
 
@@ -396,28 +398,40 @@ def _precision_value(backend, model, label):
     return label
 
 
-def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras, strengths, baseline, vname, vversion,
-                    buckets, max_prompts, run_name, scheduler=None, precision=None, vae=None, guidance=None, token=None):
+class SweepPlanError(ValueError):
+    pass
+
+
+def plan_sweep(backend_label, loras, extra_loras, strengths, baseline, vname, vversion, buckets, max_prompts, run_name):
+    """The sweep's jobs and run metadata from the Test Sweep inputs; SweepPlanError says what's missing."""
     lora_list = list(loras or []) + [l.strip() for l in (extra_loras or "").splitlines() if l.strip()]
     if not vname:
-        yield "Pick a validation prompt set.", gr.update(), gr.update(), gr.update()
-        return
+        raise SweepPlanError("Pick a validation prompt set.")
     try:
         vset = validation.load(vname, int(vversion) if vversion else None)
         strength_list = lora_sweep.parse_strengths(strengths)
     except (validation.ValidationError, ValueError, OSError) as e:
-        yield f"⚠️ {e}", gr.update(), gr.update(), gr.update()
-        return
+        raise SweepPlanError(f"⚠️ {e}") from e
     if not lora_list and not baseline:
-        yield "Pick at least one LoRA (or include the baseline).", gr.update(), gr.update(), gr.update()
-        return
+        raise SweepPlanError("Pick at least one LoRA (or include the baseline).")
     if backend_label == "ComfyUI" and not lora_list:
-        yield "ComfyUI needs at least one LoRA for the %lora_name% slot (the baseline uses it at strength 0).", gr.update(), gr.update(), gr.update()
-        return
+        raise SweepPlanError("ComfyUI needs at least one LoRA for the %lora_name% slot (the baseline uses it at strength 0).")
     jobs = lora_sweep.build_jobs(vset, lora_list, strength_list if lora_list else [], bool(baseline), buckets or None,
                                  int(max_prompts) if max_prompts else None)
     if not jobs:
-        yield "No images to make: check the buckets and prompts.", gr.update(), gr.update(), gr.update()
+        raise SweepPlanError("No images to make: check the buckets and prompts.")
+    meta = {"name": run_name or vname, "validation_set": vname, "validation_version": vset["version"],
+            "trigger": vset.get("trigger", ""), "loras": lora_list, "strengths": strength_list, "baseline": bool(baseline)}
+    return jobs, meta
+
+
+def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras, strengths, baseline, vname, vversion,
+                    buckets, max_prompts, run_name, scheduler=None, precision=None, vae=None, guidance=None, token=None):
+    try:
+        jobs, meta = plan_sweep(backend_label, loras, extra_loras, strengths, baseline, vname, vversion, buckets,
+                                max_prompts, run_name)
+    except SweepPlanError as e:
+        yield str(e), gr.update(), gr.update(), gr.update()
         return
     root = runs_root(settings)
     run_dir = lora_sweep.new_run_dir(root, run_name or vname)
@@ -441,8 +455,6 @@ def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras
             notes.append(gradient_defaults_note(backend, model, no_steps, no_cfg))
         if notes:
             yield "Note: " + " ".join(notes), gr.update(), gr.update(), gr.update()
-    meta = {"name": run_name or vname, "validation_set": vname, "validation_version": vset["version"],
-            "trigger": vset.get("trigger", ""), "loras": lora_list, "strengths": strength_list, "baseline": bool(baseline)}
     last = None
     errors = 0
     try:
@@ -458,6 +470,56 @@ def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras
     yield (f"Finished: {len(jobs)} job(s), {errors} error(s). Grids and run.json are in {run_dir}.",
            gr.update(value=_pils(grids)), gr.update(choices=lora_sweep.list_runs(root), value=os.path.basename(run_dir)),
            gr.update(choices=lora_sweep.list_runs(root), value=os.path.basename(run_dir)))
+
+
+def export_gradient_sweep(settings, model, loras, extra_loras, strengths, baseline, vname, vversion, buckets,
+                          max_prompts, run_name, scheduler=None, precision=None, vae=None, guidance=None, token=None):
+    """Writes a sweep file for GRADIENT (Queue → Import test sweep). Returns (status, file, runs, runs)."""
+    try:
+        jobs, meta = plan_sweep("GRADIENT", loras, extra_loras, strengths, baseline, vname, vversion, buckets,
+                                max_prompts, run_name)
+    except SweepPlanError as e:
+        return str(e), None, gr.update(), gr.update()
+    options = gradient_options(scheduler, precision, vae, guidance)
+    if options.get("quantization"):
+        try:  # The list shows labels; GRADIENT wants the value. Not reachable: keep what was picked.
+            options["quantization"] = _precision_value(_backend("GRADIENT", settings, token), model,
+                                                       options["quantization"])
+        except ImageGenError:
+            pass
+    root = runs_root(settings)
+    run_dir = lora_sweep.new_run_dir(root, run_name or vname)
+    try:
+        path, _ = sweep_file.export_sweep(run_dir, jobs, meta, (model or "").strip(), options)
+    except (sweep_file.SweepFileError, OSError) as e:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return f"⚠️ {e}", None, gr.update(), gr.update()
+    run = os.path.basename(run_dir)
+    download = os.path.join(tempfile.mkdtemp(prefix="artagents_sweep_"), f"{run}.lora-sweep.json")
+    shutil.copyfile(path, download)
+    unhashed = [l for l in meta["loras"] if not sweep_file.file_sha256(l)]
+    note = (f" {len(unhashed)} LoRA(s) are names, not files here, so GRADIENT finds them by name in its LoRA folder."
+            if unhashed else "")
+    runs = lora_sweep.list_runs(root)
+    return (f"✅ Sweep file for {len(jobs)} image(s) written ({run}). In GRADIENT: Queue → **Import test sweep…**, "
+            f"then bring the results folder back with **Import GRADIENT results**.{note}",
+            download, gr.update(choices=runs, value=run), gr.update(choices=runs, value=run))
+
+
+def import_gradient_results(settings, folder):
+    """Imports a GRADIENT results folder into the run that exported the sweep. Returns (status, grids, runs, runs)."""
+    root = runs_root(settings)
+    try:
+        run_dir, counts = sweep_file.import_results(root, folder)
+    except (sweep_file.SweepFileError, OSError) as e:
+        return f"⚠️ {e}", gr.update(), gr.update(), gr.update()
+    run = os.path.basename(run_dir)
+    grids = sorted(os.path.join(run_dir, f) for f in os.listdir(run_dir) if f.startswith("grid_"))
+    runs = lora_sweep.list_runs(root)
+    problems = ", ".join(f"{n} {k}" for k, n in (("with errors", counts["errors"]), ("missing", counts["missing"])) if n)
+    return (f"✅ Imported {counts['images']} image(s) into {run}" + (f" ({problems})" if problems else "")
+            + ". Score & Vote and Experiments can use it now.",
+            gr.update(value=_pils(grids)), gr.update(choices=runs, value=run), gr.update(choices=runs, value=run))
 
 
 def stop_lab_backend(backend_label, settings, token=None):

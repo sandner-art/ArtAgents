@@ -16,7 +16,7 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ### v0.14.0-alpha (November 2026): GRADIENT backend
 
-*   **[GRADIENT](https://github.com/sandner-art/gradient)** as an image backend in the Image Generation tab and the LoRA Lab. LoRA test sweeps get a real no-LoRA baseline, LoRAs by name or full path, GRADIENT's scheduler, precision, VAE and CFG-schedule options, a short queue kept ahead in GRADIENT, labelled jobs, and Stop that cancels the sweep's queued jobs. Set the URL in App Settings (default `http://127.0.0.1:8000`); an optional API token comes from `ARTAGENTS_GRADIENT_TOKEN` or a field that is not saved. See [docs/lora-lab-guide.md](docs/lora-lab-guide.md#with-gradient).
+*   **[GRADIENT](https://github.com/sandner-art/gradient)** as an image backend in the Image Generation tab and the LoRA Lab. LoRA test sweeps get a real no-LoRA baseline, LoRAs by name or full path, GRADIENT's scheduler, precision, VAE and CFG-schedule options, a short queue kept ahead in GRADIENT, labelled jobs, and Stop that cancels the sweep's queued jobs. When ArtAgents can't reach GRADIENT, **export the sweep as a file**, render it in GRADIENT (Queue → Import test sweep…) and import the results folder as a normal run. Set the URL in App Settings (default `http://127.0.0.1:8000`); an optional API token comes from `ARTAGENTS_GRADIENT_TOKEN` or a field that is not saved. See [docs/lora-lab-guide.md](docs/lora-lab-guide.md#with-gradient).
 
 ### v0.13.0-alpha (November 2026): LoRA Lab — test what your captions did
 

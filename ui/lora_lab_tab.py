@@ -69,7 +69,7 @@ def create_lora_lab_tab(initial_settings, vision_models, text_models):
                         s_vae = gr.Dropdown([lab_ui.DEFAULT_OPTION], value=lab_ui.DEFAULT_OPTION, label="VAE")
                         s_guidance = gr.Textbox(label="CFG / schedule override", placeholder="e.g. 4.5, linear(9,3), 9@0,4@20")
                 with gr.Row():
-                    s_model = gr.Dropdown([], label="Checkpoint", scale=3)
+                    s_model = gr.Dropdown([], label="Checkpoint", scale=3, allow_custom_value=True)
                     s_workflow = gr.Dropdown([], label="ComfyUI workflow (needs %lora_name%)", scale=2,
                                              visible=start_backend == "ComfyUI")
                 with gr.Row():
@@ -95,6 +95,19 @@ def create_lora_lab_tab(initial_settings, vision_models, text_models):
                         s_runs = gr.Dropdown([], label="Run", scale=4)
                         s_runs_refresh = gr.Button("🔄", scale=0, min_width=50)
                     s_run_info = gr.Markdown("")
+                with gr.Accordion("GRADIENT on another machine: sweep file out, results folder back", open=False):
+                    gr.Markdown("**Export** writes a sweep file for this sweep (all settings above; for a GRADIENT you "
+                                "can't connect to, type its model name as the Checkpoint). In GRADIENT: Queue → "
+                                "**Import test sweep…**. GRADIENT writes a results folder when the sweep is done; "
+                                "**Import** turns it into a normal run here.")
+                    with gr.Row():
+                        x_export = gr.Button("📤 Export sweep for GRADIENT", scale=1)
+                        x_file = gr.File(label="Sweep file", interactive=False, scale=2)
+                    with gr.Row():
+                        x_folder = gr.Textbox(label="Results folder from GRADIENT", scale=3,
+                                              placeholder="…/GRADIENT/outputs/sweeps/<run>-<id>")
+                        x_import = gr.Button("📥 Import GRADIENT results", scale=1)
+                    x_status = gr.Markdown("")
                 with gr.Accordion("Copy a LoRA into ComfyUI", open=False):
                     with gr.Row():
                         c_src = gr.Textbox(label="LoRA file (.safetensors)", scale=3)
@@ -247,6 +260,14 @@ def wire_lora_lab_tab(c, *, settings_state):
     )
     c["s_stop"].click(fn=lab_ui.stop_lab_backend, inputs=[c["s_backend"], settings_state, c["s_token"]],
                       outputs=[c["s_progress"]], cancels=[sweep_event])
+    c["x_export"].click(
+        fn=lab_ui.export_gradient_sweep,
+        inputs=[settings_state, c["s_model"], c["s_loras"], c["s_extra_loras"], c["s_strengths"], c["s_baseline"],
+                c["s_vname"], c["s_vversion"], c["s_buckets"], c["s_max_prompts"], c["s_run_name"], c["s_scheduler"],
+                c["s_precision"], c["s_vae"], c["s_guidance"], c["s_token"]],
+        outputs=[c["x_status"], c["x_file"], c["s_runs"], c["m_run"]])
+    c["x_import"].click(fn=lab_ui.import_gradient_results, inputs=[settings_state, c["x_folder"]],
+                        outputs=[c["x_status"], c["s_preview"], c["s_runs"], c["m_run"]])
     c["s_runs_refresh"].click(fn=lab_ui.run_choices, inputs=[settings_state], outputs=[c["s_runs"], c["m_run"]])
     c["s_runs"].change(fn=lab_ui.show_run, inputs=[settings_state, c["s_runs"]], outputs=[c["s_preview"], c["s_run_info"]])
     c["c_button"].click(fn=lab_ui.copy_lora, inputs=[c["c_src"], c["c_dst"]], outputs=[c["c_status"]])
