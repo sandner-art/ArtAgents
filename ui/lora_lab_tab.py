@@ -55,9 +55,19 @@ def create_lora_lab_tab(initial_settings, vision_models, text_models):
             # ---- test sweep ----
             with gr.Tab("Test Sweep"):
                 with gr.Row():
-                    s_backend = gr.Radio(backends, value=start_backend, label="Image backend", scale=2)
+                    s_backend = gr.Radio(backends, value=start_backend, label="Image backend", scale=3)
+                    s_token = gr.Textbox(label="GRADIENT API token (optional, not saved)", type="password", scale=2,
+                                         visible=start_backend == "GRADIENT")
                     s_refresh = gr.Button("🔄 Connect", scale=1)
                 s_status = gr.Markdown("")
+                with gr.Accordion("GRADIENT options", open=True, visible=start_backend == "GRADIENT") as s_gradient_group:
+                    gr.Markdown("Applied to every image of the sweep. The baseline is a real no-LoRA render; LoRA files can "
+                                "be absolute paths from your trainer's output folder.")
+                    with gr.Row():
+                        s_scheduler = gr.Dropdown([lab_ui.DEFAULT_OPTION], value=lab_ui.DEFAULT_OPTION, label="Scheduler")
+                        s_precision = gr.Dropdown([lab_ui.DEFAULT_OPTION], value=lab_ui.DEFAULT_OPTION, label="Precision")
+                        s_vae = gr.Dropdown([lab_ui.DEFAULT_OPTION], value=lab_ui.DEFAULT_OPTION, label="VAE")
+                        s_guidance = gr.Textbox(label="CFG / schedule override", placeholder="e.g. 4.5, linear(9,3), 9@0,4@20")
                 with gr.Row():
                     s_model = gr.Dropdown([], label="Checkpoint", scale=3)
                     s_workflow = gr.Dropdown([], label="ComfyUI workflow (needs %lora_name%)", scale=2,
@@ -204,9 +214,14 @@ def wire_lora_lab_tab(c, *, settings_state):
                         outputs=[c["v_status"], c["v_code"], c["v_file"]])
 
     # sweep
-    backend_outputs = [c["s_model"], c["s_loras"], c["s_workflow"], c["s_status"]]
-    c["s_refresh"].click(fn=lab_ui.refresh_lab_backend, inputs=[c["s_backend"], settings_state], outputs=backend_outputs)
-    c["s_backend"].change(fn=lab_ui.refresh_lab_backend, inputs=[c["s_backend"], settings_state], outputs=backend_outputs)
+    backend_outputs = [c["s_model"], c["s_loras"], c["s_workflow"], c["s_status"], c["s_gradient_group"],
+                       c["s_scheduler"], c["s_precision"], c["s_vae"]]
+    backend_inputs = [c["s_backend"], settings_state, c["s_token"]]
+    c["s_refresh"].click(fn=lab_ui.refresh_lab_backend, inputs=backend_inputs, outputs=backend_outputs)
+    c["s_model"].change(fn=lab_ui.gradient_precisions, inputs=[c["s_backend"], c["s_model"], settings_state, c["s_token"]],
+                        outputs=[c["s_precision"]])
+    c["s_backend"].change(fn=lambda b: gr.update(visible=b == "GRADIENT"), inputs=[c["s_backend"]], outputs=[c["s_token"]]
+                          ).then(fn=lab_ui.refresh_lab_backend, inputs=backend_inputs, outputs=backend_outputs)
     c["s_vname"].change(fn=lab_ui.validation_versions, inputs=[c["s_vname"]], outputs=[c["s_vversion"]])
 
     def _count(vname, vversion, loras, extra, strengths, baseline, buckets, max_prompts):
@@ -227,10 +242,11 @@ def wire_lora_lab_tab(c, *, settings_state):
         fn=lab_ui.iter_lora_sweep,
         inputs=[settings_state, c["s_backend"], c["s_model"], c["s_workflow"], c["s_loras"], c["s_extra_loras"],
                 c["s_strengths"], c["s_baseline"], c["s_vname"], c["s_vversion"], c["s_buckets"], c["s_max_prompts"],
-                c["s_run_name"]],
+                c["s_run_name"], c["s_scheduler"], c["s_precision"], c["s_vae"], c["s_guidance"], c["s_token"]],
         outputs=[c["s_progress"], c["s_preview"], c["s_runs"], c["m_run"]],
     )
-    c["s_stop"].click(fn=lab_ui.stop_lab_backend, inputs=[c["s_backend"], settings_state], cancels=[sweep_event])
+    c["s_stop"].click(fn=lab_ui.stop_lab_backend, inputs=[c["s_backend"], settings_state, c["s_token"]],
+                      outputs=[c["s_progress"]], cancels=[sweep_event])
     c["s_runs_refresh"].click(fn=lab_ui.run_choices, inputs=[settings_state], outputs=[c["s_runs"], c["m_run"]])
     c["s_runs"].change(fn=lab_ui.show_run, inputs=[settings_state, c["s_runs"]], outputs=[c["s_preview"], c["s_run_info"]])
     c["c_button"].click(fn=lab_ui.copy_lora, inputs=[c["c_src"], c["c_dst"]], outputs=[c["c_status"]])

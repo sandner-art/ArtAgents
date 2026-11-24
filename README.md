@@ -14,6 +14,10 @@ Select predefined agents, load custom agents, or utilize multi-agent "Teams" to 
 
 ##  Recent Updates
 
+### v0.14.0-alpha (November 2026): GRADIENT backend
+
+*   **[GRADIENT](https://github.com/sandner-art/gradient)** as an image backend in the Image Generation tab and the LoRA Lab. LoRA test sweeps get a real no-LoRA baseline, LoRAs by name or full path, GRADIENT's scheduler, precision, VAE and CFG-schedule options, a short queue kept ahead in GRADIENT, labelled jobs, and Stop that cancels the sweep's queued jobs. Set the URL in App Settings (default `http://127.0.0.1:8000`); an optional API token comes from `ARTAGENTS_GRADIENT_TOKEN` or a field that is not saved. See [docs/lora-lab-guide.md](docs/lora-lab-guide.md#with-gradient).
+
 ### v0.13.0-alpha (November 2026): LoRA Lab — test what your captions did
 
 A full loop for caption experiments. See [docs/lora-lab-guide.md](docs/lora-lab-guide.md).
@@ -100,7 +104,7 @@ Three new teams have been added to `agent_teams.json` to leverage these strategi
 *   **Experiment Sweeps:** Systematically run base prompts across multiple selected Agent Teams and Worker Models. Saves detailed JSON protocol files for each run and separate `.txt` files containing the raw generated prompts per model.
 *   **Configuration Management:** External JSON files for easy customization of settings, models, limiters, API profiles, agent roles, and agent teams.
 *   **App Settings UI:** Dedicated tab to configure Ollama URL, agent loading preferences, default behaviors, UI theme, and detailed Ollama API parameters (with loadable profiles).
-*   **Image Generation:** ComfyUI, Forge / A1111 / SD.Next and Ollama image backends with progress, Stop, seeds, batch size and saved PNG metadata (configure server URLs and the output folder in App Settings).
+*   **Image Generation:** ComfyUI, Forge / A1111 / SD.Next, GRADIENT and Ollama image backends with progress, Stop, seeds, batch size and saved PNG metadata (configure server URLs and the output folder in App Settings).
 *   **Persistent History:** Logs all single interactions and detailed workflow steps to `core/history.json`, viewable and clearable in the "Full History" tab.
 *   **Utilities:** Copy-to-clipboard for responses, optional prompt artifact cleaning, model release functions, contextual help tooltips, setup scripts.
 *   **Modular Codebase:** Organized structure (`core`, `agents`, `ui`) for maintainability.

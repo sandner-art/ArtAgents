@@ -369,7 +369,7 @@ with gr.Blocks(title="ArtAgents", delete_cache=(3600, 86400)) as demo:
             settings_comps['save_status_display'], settings_comps['settings_ollama_url'], settings_comps['settings_think_mode'],
             settings_comps['settings_comfyui_url'], settings_comps['settings_sdwebui_url'],
             settings_comps['settings_ollama_images_url'], settings_comps['settings_image_output_dir'],
-            settings_comps['settings_save_prompt_txt'],
+            settings_comps['settings_save_prompt_txt'], settings_comps['settings_gradient_url'],
         ],
         outputs=[settings_comps['save_status_display'], settings_state],
     )

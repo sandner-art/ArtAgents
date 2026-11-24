@@ -92,6 +92,7 @@ def test_save_connection_settings_writes_and_reloads():
     assert written["image_generation"] == {
         "backend": "ComfyUI", "comfyui_url": "http://127.0.0.1:8189", "sdwebui_url": "http://127.0.0.1:7861",
         "ollama_images_url": "http://localhost:11434", "output_dir": "renders", "save_prompt_txt": False,
+        "gradient_url": "http://127.0.0.1:8000",  # Not given: the default
     }
 
 

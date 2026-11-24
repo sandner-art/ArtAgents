@@ -11,6 +11,7 @@ SETTINGS_FILE = "settings.json"
 BACKEND_URL_KEYS = {
     "ComfyUI": "comfyui_url",
     "Forge / A1111 / SD.Next": "sdwebui_url",
+    "GRADIENT": "gradient_url",
     "Ollama (experimental)": "ollama_images_url",
 }
 
@@ -18,6 +19,7 @@ IMAGE_GEN_DEFAULTS = {
     "backend": "ComfyUI",
     "comfyui_url": "http://127.0.0.1:8188",
     "sdwebui_url": "http://127.0.0.1:7860",
+    "gradient_url": "http://127.0.0.1:8000",
     "ollama_images_url": "http://localhost:11434",
     "output_dir": "outputs/images",
     "save_prompt_txt": True,
@@ -58,6 +60,7 @@ def save_connection_settings_callback(
     ollama_images_url: str,
     output_dir: str,
     save_prompt_txt: bool,
+    gradient_url: str = "",
 ):
     """
     Saves Ollama connection and image-server settings (chained after the main Save button).
@@ -70,7 +73,7 @@ def save_connection_settings_callback(
         settings = {}
     problems = []
     for label, url in (("Ollama", ollama_url), ("ComfyUI", comfyui_url),
-                       ("Forge/A1111", sdwebui_url), ("Ollama images", ollama_images_url)):
+                       ("Forge/A1111", sdwebui_url), ("Ollama images", ollama_images_url), ("GRADIENT", gradient_url)):
         if url and not is_valid_http_url(url):
             problems.append(f"{label} URL must start with http:// or https:// ('{url}')")
     if problems:
@@ -86,6 +89,7 @@ def save_connection_settings_callback(
         "comfyui_url": (comfyui_url or IMAGE_GEN_DEFAULTS["comfyui_url"]).strip(),
         "sdwebui_url": (sdwebui_url or IMAGE_GEN_DEFAULTS["sdwebui_url"]).strip(),
         "ollama_images_url": (ollama_images_url or IMAGE_GEN_DEFAULTS["ollama_images_url"]).strip(),
+        "gradient_url": (gradient_url or IMAGE_GEN_DEFAULTS["gradient_url"]).strip(),
         "output_dir": (output_dir or IMAGE_GEN_DEFAULTS["output_dir"]).strip(),
         "save_prompt_txt": bool(save_prompt_txt),
     })

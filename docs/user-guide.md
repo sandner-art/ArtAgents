@@ -81,7 +81,7 @@ Prepare caption files for LoRA and fine-tune training. The full walkthrough is i
 
 ### LoRA Lab Tab
 
-Test trained LoRAs: versioned validation prompt sets, test sweeps through ComfyUI or Forge (LoRA files × strengths × prompts × seeds, with a no-LoRA baseline and labelled grids), blind pairwise votes, optional metrics, and experiment records with reports. See [lora-lab-guide.md](lora-lab-guide.md).
+Test trained LoRAs: versioned validation prompt sets, test sweeps through ComfyUI, Forge or GRADIENT (LoRA files × strengths × prompts × seeds, with a no-LoRA baseline and labelled grids), blind pairwise votes, optional metrics, and experiment records with reports. See [lora-lab-guide.md](lora-lab-guide.md).
 
 ### 4.3. Agent Team Editor Tab
 
@@ -123,7 +123,7 @@ View the persistent log (`core/history.json`) of all interactions (chat, comment
 
 Configure global application behavior and default Ollama API parameters.
 
-*   Set the **Ollama URL**.
+*   Set the **Ollama URL**, and the image backend URLs (ComfyUI, Forge / A1111 / SD.Next, GRADIENT, Ollama images) with the output folder.
 *   Configure **Agent Loading** preferences (use default/custom roles).
 *   Set default UI states (e.g., enable advanced API options by default).
 *   Load **Ollama API Profiles** (presets for Temperature, Top K, etc.).

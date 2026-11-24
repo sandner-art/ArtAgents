@@ -35,6 +35,7 @@ class ImageGenRequest:
     sampler: str | None = None
     workflow: str | None = None       # ComfyUI workflow filename (image_workflows/comfyui/*.json)
     loras: list = field(default_factory=list)  # [(lora name, strength)]: %lora_*% placeholders / <lora:…> tags
+    extra: dict = field(default_factory=dict)  # Backend-specific options (GRADIENT: quantization, vae_id, label, group…)
 
 
 @dataclass

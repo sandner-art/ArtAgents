@@ -1,11 +1,12 @@
 # Image workflows
 
-ArtAgents can generate images through three local backends (Image Generation tab):
+ArtAgents can generate images through four local backends (Image Generation tab and LoRA Lab):
 
 | Backend | Default URL | Notes |
 |---|---|---|
 | **ComfyUI** | `http://127.0.0.1:8188` | Runs the workflow files in `image_workflows/comfyui/`. Any model ComfyUI can run (SD 1.5, SDXL, FLUX, Z-Image, LoRAs, ControlNet…). |
 | **Forge / A1111 / SD.Next** | `http://127.0.0.1:7860` | Start the WebUI with `--api`. ArtAgents also defaults to port 7860, so whichever starts second gets 7861. Check the URL. |
+| **GRADIENT** | `http://127.0.0.1:8000` | [GRADIENT](https://github.com/sandner-art/gradient) (diffusers, with its own job queue). No workflow needed. Sizes are rounded down to multiples of 8; empty steps/CFG use GRADIENT's defaults (25, 7.5). For a GRADIENT with an API token, set `ARTAGENTS_GRADIENT_TOKEN` (the LoRA Lab also has a field that is not saved). |
 | **Ollama (experimental)** | `http://localhost:11434` | Uses `/v1/images/generations`. Ollama removed its experimental image generation in v0.32.6, so current versions refuse. It works again if Ollama restores it, and also with other OpenAI-compatible image servers. |
 
 ## ComfyUI workflows

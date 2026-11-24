@@ -19,10 +19,11 @@ from dataclasses import asdict, dataclass
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from ..image_gen import ImageGenError, ImageGenRequest
-from ..image_gen.base import GenProgress, GenResult
+from ..image_gen.base import GenResult
 from . import validation
 
 BASELINE = "baseline (no LoRA)"
+QUEUE_AHEAD = 8  # Jobs kept queued ahead in backends with their own queue (GRADIENT)
 RUNS_DIR = os.path.join("outputs", "lora_tests")
 
 
@@ -84,8 +85,8 @@ def build_jobs(vset: dict, loras: list[str], strengths: list[float], include_bas
 
 
 def request_for(job: Job, backend_label: str, model: str | None, workflow: str | None, sampler: str | None,
-                baseline_lora: str | None) -> ImageGenRequest:
-    """ComfyUI baselines reuse the LoRA slot at strength 0 (ComfyUI then skips the LoRA)."""
+                baseline_lora: str | None, extra: dict | None = None) -> ImageGenRequest:
+    """ComfyUI baselines reuse the LoRA slot at strength 0 (ComfyUI then skips the LoRA); Forge and GRADIENT use none."""
     if job.lora is not None:
         loras = [(job.lora, job.strength)]
     elif backend_label == "ComfyUI" and baseline_lora:
@@ -94,7 +95,22 @@ def request_for(job: Job, backend_label: str, model: str | None, workflow: str |
         loras = []
     return ImageGenRequest(prompt=job.prompt, negative_prompt=job.negative, width=job.width, height=job.height,
                            steps=job.steps, cfg_scale=job.cfg, seed=job.seed, batch_size=1, model=model or None,
-                           sampler=sampler or None, workflow=workflow or None, loras=loras)
+                           sampler=sampler or None, workflow=workflow or None, loras=loras, extra=dict(extra or {}))
+
+
+def gradient_extra(job: Job, run_dir: str, meta: dict, options: dict | None = None) -> dict:
+    """GRADIENT job options: render options plus how the job shows in GRADIENT's queue and gallery."""
+    run = os.path.basename(os.path.normpath(run_dir))
+    name = meta.get("name") or run
+    extra = {k: v for k, v in (options or {}).items() if v not in (None, "")}
+    extra.update({
+        "label": f"ArtAgents · LoRA test · {name} · {job.condition} · seed {job.seed}",
+        "group": f"artagents-{run}",
+        "tags": [f"ArtAgents/LoRA test/{name}"],
+        "origin": {"app": "ArtAgents", "run": run, "job_index": job.index, "prompt_index": job.prompt_index,
+                   "bucket": job.bucket, "condition": job.condition},
+    })
+    return extra
 
 
 def new_run_dir(root: str, name: str) -> str:
@@ -125,39 +141,106 @@ def list_runs(root: str) -> list[str]:
     return sorted((d for d in os.listdir(root) if os.path.isfile(os.path.join(root, d, "run.json"))), reverse=True)
 
 
+def _file_name(job: Job) -> str:
+    return f"{job.index:04d}_p{job.prompt_index:02d}_s{job.seed}_{re.sub(r'[^A-Za-z0-9.@_-]+', '_', job.condition)}.png"
+
+
 def run_iter(backend, backend_label: str, jobs: list[Job], run_dir: str, meta: dict, model: str | None = None,
-             workflow: str | None = None, sampler: str | None = None):
+             workflow: str | None = None, sampler: str | None = None, options: dict | None = None):
     """
     Generator: renders every job, saving images and run.json after each one.
     Yields (done, total, message, last image path or None). Stopping keeps finished images.
+
+    Backends with their own queue (GRADIENT: `submit` + `wait_iter`) get QUEUE_AHEAD jobs queued ahead,
+    ordered by condition so LoRAs switch as rarely as possible; closing the generator cancels what is
+    still queued.
     """
     loras = [j.lora for j in jobs if j.lora]
     baseline_lora = loras[0] if loras else None
     data = dict(meta, jobs=[asdict(j) for j in jobs], results=[], backend=backend_label, model=model,
-                workflow=workflow, sampler=sampler, started=time.strftime("%Y-%m-%d %H:%M:%S"))
+                workflow=workflow, sampler=sampler, options=dict(options or {}),
+                started=time.strftime("%Y-%m-%d %H:%M:%S"))
     save_run(run_dir, data)
     total = len(jobs)
-    for job in jobs:
-        req = request_for(job, backend_label, model, workflow, sampler, baseline_lora)
-        message = f"{job.index + 1}/{total}: {job.condition}, seed {job.seed}"
-        path, error = None, None
-        try:
-            images = []
-            for event in backend.generate_iter(req):
-                if isinstance(event, GenProgress):
-                    continue
-                if isinstance(event, GenResult):
-                    images = event.images
-            if not images:
-                raise ImageGenError("The backend returned no image.")
-            fname = f"{job.index:04d}_p{job.prompt_index:02d}_s{job.seed}_{re.sub(r'[^A-Za-z0-9.@_-]+', '_', job.condition)}.png"
-            path = os.path.join(run_dir, fname)
-            images[0].image.save(path)
-        except ImageGenError as e:
-            error = str(e)
-        data["results"].append({"job": job.index, "path": os.path.basename(path) if path else None, "error": error})
+
+    def extra_for(job):
+        return gradient_extra(job, run_dir, meta, options) if backend_label == "GRADIENT" else dict(options or {})
+
+    def record(job, images, error):
+        path, remote = None, {}
+        if images and not error:
+            info = images[0].info or {}
+            remote = {k: info[k] for k in ("output_id", "run_uuid", "gradient_job") if info.get(k) is not None}
+            if info.get("loras_skipped"):
+                error = (f"LoRA not applied by {backend_label} (no matching layers: wrong model family?): "
+                         + ", ".join(info["loras_skipped"]))
+            else:
+                path = os.path.join(run_dir, _file_name(job))
+                images[0].image.save(path)
+        entry = {"job": job.index, "path": os.path.basename(path) if path else None, "error": error}
+        if remote:
+            entry["remote"] = remote
+        data["results"].append(entry)
         save_run(run_dir, data)
-        yield job.index + 1, total, message + (f" ⚠ {error}" if error else ""), path
+        return path, error
+
+    if hasattr(backend, "submit") and hasattr(backend, "wait_iter"):
+        # Queue a small window ahead (GRADIENT never idles, Stop has little to cancel, the user's own
+        # queue isn't flooded), ordered by condition so LoRAs switch as rarely as possible.
+        window = max(1, int(getattr(backend, "queue_ahead", QUEUE_AHEAD)))
+        order = sorted(jobs, key=lambda j: (j.lora is not None, str(j.lora or ""), j.strength, j.index))
+        submitted: dict[int, str] = {}
+        failed: dict[int, str] = {}
+        state = {"next": 0}
+
+        def top_up(upto: int) -> None:
+            while state["next"] < min(len(order), upto):
+                pos = state["next"]
+                state["next"] += 1
+                job = order[pos]
+                try:
+                    submitted[pos] = backend.submit(request_for(job, backend_label, model, workflow, sampler,
+                                                                baseline_lora, extra_for(job)))
+                except ImageGenError as e:
+                    failed[pos] = str(e)
+
+        recorded = 0
+        try:
+            for pos, job in enumerate(order):
+                top_up(pos + window)
+                images, error = [], failed.get(pos)
+                if pos in submitted:
+                    try:
+                        for event in backend.wait_iter(submitted[pos]):
+                            if isinstance(event, GenResult):
+                                images = event.images
+                    except ImageGenError as e:
+                        error = str(e)
+                path, error = record(job, images, error)
+                recorded = done = pos + 1
+                yield done, total, f"{done}/{total}: {job.condition}, seed {job.seed}" + (f" ⚠ {error}" if error else ""), path
+        finally:
+            pending = [job_id for pos, job_id in submitted.items() if pos >= recorded]
+            if pending:  # Stopped: cancel what is still queued in the backend
+                if hasattr(backend, "cancel_many"):
+                    backend.cancel_many(pending)
+                else:
+                    for job_id in pending:
+                        backend.cancel(job_id)
+    else:
+        for done, job in enumerate(jobs, start=1):
+            req = request_for(job, backend_label, model, workflow, sampler, baseline_lora, extra_for(job))
+            images, error = [], None
+            try:
+                for event in backend.generate_iter(req):
+                    if isinstance(event, GenResult):
+                        images = event.images
+                if not images:
+                    raise ImageGenError("The backend returned no image.")
+            except ImageGenError as e:
+                error = str(e)
+            path, error = record(job, images, error)
+            yield done, total, f"{done}/{total}: {job.condition}, seed {job.seed}" + (f" ⚠ {error}" if error else ""), path
     data["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     save_run(run_dir, data)
 

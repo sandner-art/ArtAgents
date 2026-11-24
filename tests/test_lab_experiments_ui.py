@@ -378,12 +378,12 @@ def test_runs_root(tmp_path):
 def test_refresh_lab_backend():
     backend = FakeBackend()
     with patch("core.lab_ui.get_backend", return_value=backend):
-        models, loras, workflow, status = lab_ui.refresh_lab_backend("ComfyUI", {})
+        models, loras, workflow, status, gradient_group, *_ = lab_ui.refresh_lab_backend("ComfyUI", {})
     assert models["value"] == "base.safetensors" and loras["choices"] == ["e04.safetensors", "e08.safetensors"]
     assert loras["value"] == [] and workflow["visible"] and workflow["value"] == "lora_txt2img.json"
-    assert status.startswith("✅") and "2 LoRA(s) found" in status
+    assert status.startswith("✅") and "2 LoRA(s) found" in status and not gradient_group["visible"]
     with patch("core.lab_ui.get_backend", return_value=FakeBackend(ok=False)):
-        models, loras, workflow, status = lab_ui.refresh_lab_backend("Forge / A1111 / SD.Next", {})
+        models, loras, workflow, status, *_ = lab_ui.refresh_lab_backend("Forge / A1111 / SD.Next", {})
     assert status.startswith("⚠️") and models["choices"] == [] and not workflow["visible"]
     with patch("core.lab_ui.get_backend", side_effect=ImageGenError("unreachable")):
         assert "unreachable" in lab_ui.refresh_lab_backend("ComfyUI", {})[3]
@@ -541,4 +541,4 @@ def test_experiments_table_and_embedder_choices(app_root):
     with patch("core.lab.metrics.importlib.util.find_spec", return_value=None):
         upd, note = lab_ui.embedder_choices()
     assert upd["choices"] == [] and note.startswith("⚠️")
-    assert lab_ui.lab_backend_labels() == ["ComfyUI", "Forge / A1111 / SD.Next"]
+    assert lab_ui.lab_backend_labels() == ["ComfyUI", "Forge / A1111 / SD.Next", "GRADIENT"]

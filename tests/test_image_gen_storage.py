@@ -64,7 +64,7 @@ def test_parameters_text_uses_backend_info_when_request_unset():
 
 
 def test_registry_and_get_backend():
-    assert set(BACKENDS) == set(DEFAULT_URLS) == {"ComfyUI", "Forge / A1111 / SD.Next", "Ollama (experimental)"}
+    assert set(BACKENDS) == set(DEFAULT_URLS) == {"ComfyUI", "Forge / A1111 / SD.Next", "GRADIENT", "Ollama (experimental)"}
     assert isinstance(get_backend("ComfyUI", ""), ComfyUIBackend)
     assert get_backend("ComfyUI", "").base_url == "http://127.0.0.1:8188"
     assert isinstance(get_backend("Forge / A1111 / SD.Next", "http://h:7861"), SDWebUIBackend)

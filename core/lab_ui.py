@@ -305,7 +305,25 @@ def count_images(frame, seeds, loras, strengths, baseline, buckets, max_prompts=
 # =====================================================================
 # LoRA Lab: test sweep
 # =====================================================================
-LAB_BACKENDS = ["ComfyUI", "Forge / A1111 / SD.Next"]
+LAB_BACKENDS = ["ComfyUI", "Forge / A1111 / SD.Next", "GRADIENT"]
+DEFAULT_OPTION = "(model default)"
+
+
+def _backend(backend_label, settings, token=None):
+    """A backend for the LoRA Lab; GRADIENT also takes an API token (not saved)."""
+    url = backend_url(settings, backend_label)
+    if backend_label == "GRADIENT":
+        from .image_gen import GradientBackend
+        return GradientBackend(url, token=token or None)
+    return get_backend(backend_label, url)
+
+
+def gradient_options(scheduler, precision, vae, guidance) -> dict:
+    """GRADIENT render options from the Test Sweep's GRADIENT accordion ('' = model default)."""
+    def pick(v):
+        return "" if v in (None, "", DEFAULT_OPTION) else v
+    return {"scheduler": pick(scheduler), "quantization": pick(precision), "vae_id": pick(vae),
+            "guidance": (guidance or "").strip()}
 
 
 def runs_root(settings) -> str:
@@ -314,25 +332,55 @@ def runs_root(settings) -> str:
     return os.path.join(os.path.dirname(os.path.normpath(base)), "lora_tests")
 
 
-def refresh_lab_backend(backend_label, settings):
+def refresh_lab_backend(backend_label, settings, token=None):
     url = backend_url(settings, backend_label)
+    schedulers, precisions, vaes = [], [], []
     try:
-        backend = get_backend(backend_label, url)
+        backend = _backend(backend_label, settings, token)
         ok, message = backend.check()
         models = backend.list_models() if ok else []
         loras = backend.list_loras() if ok and hasattr(backend, "list_loras") else []
+        if ok and backend_label == "GRADIENT":
+            schedulers = backend.list_samplers()
+            precisions = [label for label, _ in backend.list_precisions(models[0] if models else None)]
+            vaes = backend.list_vaes()
     except ImageGenError as e:
         ok, message, models, loras = False, str(e), [], []
-    is_comfy = backend_label == "ComfyUI"
+    is_comfy, is_gradient = backend_label == "ComfyUI", backend_label == "GRADIENT"
     workflows = list_workflows() if is_comfy else []
     default_wf = "lora_txt2img.json" if "lora_txt2img.json" in workflows else (workflows[0] if workflows else None)
     status = f"{'✅' if ok else '⚠️'} {backend_label} at {url}: {message}" + (f" · {len(loras)} LoRA(s) found." if ok else "")
+
+    def opts(values):
+        return gr.update(choices=[DEFAULT_OPTION] + list(values), value=DEFAULT_OPTION)
     return (gr.update(choices=models, value=models[0] if models else None),
-            gr.update(choices=loras, value=[]), gr.update(visible=is_comfy, choices=workflows, value=default_wf), status)
+            gr.update(choices=loras, value=[]), gr.update(visible=is_comfy, choices=workflows, value=default_wf), status,
+            gr.update(visible=is_gradient), opts(schedulers), opts(precisions), opts(vaes))
+
+
+def gradient_precisions(backend_label, model, settings, token=None):
+    """Precisions depend on the model (and the machine): refresh them when the checkpoint changes."""
+    if backend_label != "GRADIENT" or not model:
+        return gr.update()
+    try:
+        labels = [label for label, _ in _backend(backend_label, settings, token).list_precisions(model)]
+    except ImageGenError:
+        return gr.update()
+    return gr.update(choices=[DEFAULT_OPTION] + labels, value=DEFAULT_OPTION)
+
+
+def _precision_value(backend, model, label):
+    """The precision list shows labels; GRADIENT wants the value (e.g. 'bnb-4bit')."""
+    if label in (None, "", DEFAULT_OPTION):
+        return ""
+    for lab, value in backend.list_precisions(model):
+        if lab == label:
+            return value
+    return label
 
 
 def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras, strengths, baseline, vname, vversion,
-                    buckets, max_prompts, run_name):
+                    buckets, max_prompts, run_name, scheduler=None, precision=None, vae=None, guidance=None, token=None):
     lora_list = list(loras or []) + [l.strip() for l in (extra_loras or "").splitlines() if l.strip()]
     if not vname:
         yield "Pick a validation prompt set.", gr.update(), gr.update(), gr.update()
@@ -356,14 +404,33 @@ def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras
         return
     root = runs_root(settings)
     run_dir = lora_sweep.new_run_dir(root, run_name or vname)
-    backend = get_backend(backend_label, backend_url(settings, backend_label))
+    backend = _backend(backend_label, settings, token)
+    options, sampler = {}, None
+    if backend_label == "GRADIENT":
+        options = gradient_options(scheduler, precision, vae, guidance)
+        sampler = options.pop("scheduler") or None
+        try:
+            options["quantization"] = _precision_value(backend, model, options.get("quantization"))
+        except ImageGenError as e:
+            yield f"⚠️ {e}", gr.update(), gr.update(), gr.update()
+            return
+        notes = []
+        odd = sorted({(j.width, j.height) for j in jobs if j.width % 8 or j.height % 8})
+        if odd:
+            notes.append(f"GRADIENT needs sizes in multiples of 8; {', '.join(f'{w}×{h}' for w, h in odd)} will be rounded down.")
+        if any(not j.steps for j in jobs) or (any(j.cfg is None for j in jobs) and not options.get("guidance")):
+            notes.append("Steps or CFG are not set in the validation set, so GRADIENT uses its defaults (25 steps, "
+                         "CFG 7.5). Set them in the validation set for distilled or turbo models.")
+        if notes:
+            yield "Note: " + " ".join(notes), gr.update(), gr.update(), gr.update()
     meta = {"name": run_name or vname, "validation_set": vname, "validation_version": vset["version"],
             "trigger": vset.get("trigger", ""), "loras": lora_list, "strengths": strength_list, "baseline": bool(baseline)}
     last = None
     errors = 0
     try:
         for done, total, message, path in lora_sweep.run_iter(backend, backend_label, jobs, run_dir, meta, model,
-                                                              workflow if backend_label == "ComfyUI" else None):
+                                                              workflow if backend_label == "ComfyUI" else None,
+                                                              sampler, options):
             errors += int("⚠" in message)
             last = path or last
             yield (f"{message}\n{done}/{total} image(s) in {run_dir}" + (f" · {errors} error(s)" if errors else ""),
@@ -375,11 +442,13 @@ def iter_lora_sweep(settings, backend_label, model, workflow, loras, extra_loras
            gr.update(choices=lora_sweep.list_runs(root), value=os.path.basename(run_dir)))
 
 
-def stop_lab_backend(backend_label, settings):
+def stop_lab_backend(backend_label, settings, token=None):
+    """Stops the backend's current render (and, for GRADIENT, the sweep's queued jobs)."""
     try:
-        get_backend(backend_label, backend_url(settings, backend_label)).interrupt()
+        _backend(backend_label, settings, token).interrupt()
     except Exception:
         pass
+    return "⏹ Stopped. Finished images, run.json and grids stay in the run folder (open it under Earlier runs, press 🔄)."
 
 
 def copy_lora(src, comfy_dir):

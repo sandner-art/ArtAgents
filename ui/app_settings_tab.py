@@ -82,6 +82,10 @@ def create_app_settings_tab(initial_settings):
                         label="Forge / A1111 / SD.Next URL", value=img_settings["sdwebui_url"],
                         info="Start the WebUI with --api. If it uses port 7860, ArtAgents moves to the next free port."
                     )
+                    settings_gradient_url = gr.Textbox(
+                        label="GRADIENT URL", value=img_settings["gradient_url"],
+                        info="GRADIENT's server (default port 8000). On another machine, also set ARTAGENTS_GRADIENT_TOKEN if GRADIENT uses an API token."
+                    )
                     settings_ollama_images_url = gr.Textbox(label="Ollama (image models) URL", value=img_settings["ollama_images_url"])
                     settings_image_output_dir = gr.Textbox(
                         label="Image Output Folder", value=img_settings["output_dir"],
@@ -156,6 +160,7 @@ def create_app_settings_tab(initial_settings):
         "settings_comfyui_url": settings_comfyui_url,
         "settings_sdwebui_url": settings_sdwebui_url,
         "settings_ollama_images_url": settings_ollama_images_url,
+        "settings_gradient_url": settings_gradient_url,
         "settings_image_output_dir": settings_image_output_dir,
         "settings_save_prompt_txt": settings_save_prompt_txt,
         "settings_max_tokens_slider_range": settings_max_tokens_slider_range,

@@ -32,7 +32,7 @@ Test Sweep shows the image count before you run.
 
 ## 2. Test Sweep
 
-1. Pick **ComfyUI** or **Forge / A1111 / SD.Next** and press **🔄 Connect** (URLs come from App Settings).
+1. Pick **ComfyUI**, **Forge / A1111 / SD.Next** or **GRADIENT** and press **🔄 Connect** (URLs come from App Settings).
 2. **ComfyUI** needs a workflow with `%lora_name%` and `%lora_strength%` placeholders: use the included
    `lora_txt2img.json` or add a `LoraLoader` to your own (see `image_workflows/README.md`). The baseline reuses the LoRA
    slot at strength 0, which ComfyUI treats as "no LoRA". **Forge / A1111** needs nothing: ArtAgents adds
@@ -43,6 +43,27 @@ Test Sweep shows the image count before you run.
    columns = seeds) go to `outputs/lora_tests/<time>-<name>/`. **Stop** keeps what is finished.
 
 **Copy a LoRA into ComfyUI** copies a `.safetensors` file into `ComfyUI/models/loras` (never overwrites).
+
+### With GRADIENT
+
+[GRADIENT](https://github.com/sandner-art/gradient) (a diffusers-based app with its own job queue) works well for LoRA
+tests: the baseline is a real render with LoRA layers switched off, LoRAs stay loaded between images, and every image
+has its own seeded generator.
+
+- **Connect** lists GRADIENT's diffusion models and the LoRAs in its `models/lora` folder. LoRAs straight from your
+  trainer's output folder work too: put their full paths under **Other LoRA names** (GRADIENT must run on the same PC,
+  or see the same folder).
+- **GRADIENT options** apply to every image of the sweep: scheduler, precision (the list depends on the checkpoint
+  and your GPU), VAE, and a CFG override that also takes GRADIENT's schedules (`linear(9,3)`, `9@0,4@20`).
+- Sizes are rounded down to multiples of 8. Steps or CFG missing from the validation set fall back to GRADIENT's
+  defaults (25 steps, CFG 7.5): set them for distilled or turbo models. The Test Sweep says so before it starts.
+- ArtAgents keeps up to 8 jobs queued ahead in GRADIENT, ordered so each LoRA loads once. The jobs are labelled
+  `ArtAgents · LoRA test · <run> · <condition> · seed <n>` in GRADIENT's queue; `run.json` keeps each image's
+  GRADIENT output id. **Stop** cancels the sweep's queued jobs (your own GRADIENT jobs are left alone).
+- A LoRA that does not fit the checkpoint (another model family) is recorded as an error instead of an image that
+  only looks like the baseline. (GRADIENT 0.9.0 only logs this; a GRADIENT that reports skipped LoRAs is needed.)
+- If GRADIENT runs on another machine with an API token, put it in **GRADIENT API token** (not saved) or set
+  `ARTAGENTS_GRADIENT_TOKEN` before starting ArtAgents.
 
 For multi-concept LoRAs, put each trigger alone and the triggers together into the validation set; the grids then
 show leakage between concepts.
